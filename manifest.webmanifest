@@ -21,5 +21,13 @@
       "type": "image/png",
       "purpose": "any maskable"
     }
-  ]
+  ],
+  "id": "https://brad38.github.io/Espelha/",
+  "related_applications": [
+    {
+      "platform": "webapp",
+      "id": "https://brad38.github.io/Espelha/"
+    }
+  ],
+  "prefer_related_applications": false
 }

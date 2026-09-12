@@ -62,6 +62,7 @@
   let toastTimer = null;
   let deferredInstallPrompt = null;
   let isInstalled = false;
+  const PWA_INSTALL_STORAGE_KEY = "espelha-pwa-installed";
 
   const PEER_PREFIX = "espelha-room-";
   const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -312,7 +313,7 @@
       button.classList.add("is-installed");
       button.innerHTML = `
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 12.5 4 4 8-9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        App instalado
+        Já instalado
       `;
       return;
     }
@@ -350,6 +351,27 @@
     toast("Abra o menu do navegador e use a opção “Instalar app”.");
   }
 
+  async function detectInstalledPwa() {
+    if (isStandaloneMode()) return true;
+
+    try {
+      if (typeof navigator.getInstalledRelatedApps === "function") {
+        const relatedApps = await navigator.getInstalledRelatedApps();
+        if (relatedApps.some((app) => app.platform === "webapp")) {
+          return true;
+        }
+      }
+    } catch (error) {
+      console.warn("Installed PWA detection failed:", error);
+    }
+
+    try {
+      return localStorage.getItem(PWA_INSTALL_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
   async function registerPwa() {
     if ("serviceWorker" in navigator) {
       try {
@@ -359,18 +381,23 @@
       }
     }
 
-    isInstalled = isStandaloneMode();
+    isInstalled = await detectInstalledPwa();
     updateInstallButton();
 
     window.addEventListener("beforeinstallprompt", (event) => {
       event.preventDefault();
       deferredInstallPrompt = event;
+
+      // Se o navegador voltou a oferecer instalação, tratamos como não instalado.
+      isInstalled = false;
+      try { localStorage.removeItem(PWA_INSTALL_STORAGE_KEY); } catch {}
       updateInstallButton();
     });
 
     window.addEventListener("appinstalled", () => {
       isInstalled = true;
       deferredInstallPrompt = null;
+      try { localStorage.setItem(PWA_INSTALL_STORAGE_KEY, "1"); } catch {}
       updateInstallButton();
       toast("App instalado com sucesso.");
     });
