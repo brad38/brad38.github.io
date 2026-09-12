@@ -1,68 +1,143 @@
-# Espelha — protótipo WebRTC
+# Espelha
 
-Protótipo estático de compartilhamento de tela P2P pelo navegador, pensado para ser publicado no GitHub Pages.
+Compartilhamento de tela direto pelo navegador, com baixa latência e sem necessidade de conta ou instalação obrigatória.
 
-## O que já funciona
+O **Espelha** é uma aplicação web de compartilhamento de tela baseada em WebRTC. A proposta é permitir que uma pessoa compartilhe sua tela, janela ou aba do navegador e envie um link para outras pessoas assistirem em tempo real.
 
-- Captura de tela/janela/aba com `getDisplayMedia()`.
-- Opções 1080p/720p/automático e 30/60 FPS.
-- Áudio da tela quando o navegador/SO oferece suporte.
-- Microfone opcional.
-- Sala aleatória com link compartilhável.
-- Espectadores entram via `?room=CODIGO`.
-- WebRTC P2P usando PeerJS para sinalização.
-- Contador de espectadores no host.
-- Tela cheia e controle de áudio no espectador.
-- Layout responsivo.
+O projeto foi pensado para situações em que você só quer mostrar sua tela para alguém sem precisar criar servidor, entrar em chamada ou instalar um aplicativo específico.
 
-## Testar localmente
+---
 
-Não abra somente o `index.html` por `file://`. Rode em `localhost`:
+## Sobre o projeto
 
-```bash
-python -m http.server 8080
-```
+O funcionamento é baseado em salas temporárias.
 
-Depois abra:
+Quem transmite cria uma sala e recebe um código e um link compartilhável. Quem recebe esse link pode entrar diretamente pelo navegador e assistir à transmissão.
 
-```text
-http://localhost:8080
-```
+A mídia é transmitida utilizando **WebRTC**, buscando estabelecer uma conexão direta entre os navegadores.
 
-Para testar com duas máquinas, publique no GitHub Pages ou use um servidor HTTPS acessível pelas duas.
+O **PeerJS** é utilizado para facilitar o processo de sinalização necessário para estabelecer essas conexões.
 
-## Publicar no GitHub Pages
+---
 
-1. Crie um repositório, por exemplo `espelha`.
-2. Envie `index.html`, `styles.css`, `app.js` e `.nojekyll` para a raiz.
-3. No GitHub: **Settings → Pages**.
-4. Em **Build and deployment**, selecione **Deploy from a branch**.
-5. Escolha a branch `main` e a pasta `/ (root)`.
+## Recursos
 
-A URL ficará parecida com:
+* Compartilhamento de tela, janela ou aba
+* Transmissão em 720p ou 1080p
+* Suporte a 30 e 60 FPS
+* Ajuste automático de resolução
+* Áudio da tela quando suportado pelo navegador
+* Microfone opcional
+* Salas com código aleatório
+* Links compartilháveis
+* Entrada sem cadastro
+* Contador de espectadores
+* Controle de áudio para quem assiste
+* Modo tela cheia
+* Interface responsiva
+* Suporte a instalação como PWA
+* Interface adaptada para desktop e dispositivos móveis
 
-```text
-https://SEU-USUARIO.github.io/espelha/
-```
+---
 
-## Arquitetura deste protótipo
+## Interface
 
-```text
-Host browser ── WebRTC media ──> Viewer browser
-      │                              │
-      └──── PeerJS Cloud signaling ──┘
-```
+O Espelha foi desenvolvido com foco em uma experiência simples: abrir, compartilhar e enviar o link.
 
-O PeerJS Cloud só faz a sinalização inicial. A mídia tenta trafegar P2P entre os navegadores.
+Não há sistema de contas, perfis ou configuração complexa antes de iniciar uma transmissão.
 
-## Limitações importantes
+O fluxo básico é:
 
-- Este é um protótipo. O PeerJS Cloud público não deve ser tratado como infraestrutura de produção.
-- Sem servidor TURN próprio, alguns pares atrás de NAT/firewalls restritivos podem não conseguir estabelecer a conexão.
-- Em P2P simples, o host envia um stream por espectador. Com muitos espectadores, o upload cresce rapidamente.
-- Para grupos maiores, a evolução natural é usar um SFU, como LiveKit, mediasoup ou Janus.
-- A captura de áudio do sistema varia entre navegador e sistema operacional. O Chrome/Edge costuma oferecer áudio de aba com mais consistência.
+Criar transmissão → escolher a tela → receber o código da sala → compartilhar o link → assistir pelo navegador.
 
-## Dependência externa
+---
 
-PeerJS 1.5.5 via jsDelivr.
+## Tecnologias
+
+O projeto utiliza uma stack propositalmente simples.
+
+### Frontend
+
+* HTML
+* CSS
+* JavaScript
+
+### Comunicação
+
+* WebRTC
+* PeerJS
+
+### Recursos do navegador
+
+* MediaDevices API
+* `getDisplayMedia()`
+* `getUserMedia()`
+* Fullscreen API
+* Clipboard API
+* Service Workers
+* Web App Manifest
+
+### Hospedagem
+
+* GitHub Pages
+
+---
+
+## Arquitetura
+
+O PeerJS participa da descoberta e da negociação entre os navegadores. Depois que a conexão é estabelecida, a transmissão utiliza WebRTC.
+
+A arquitetura atual prioriza conexões P2P, fazendo com que a mídia tente trafegar diretamente entre quem transmite e quem assiste.
+
+---
+
+## PWA
+
+O Espelha também pode ser instalado como uma aplicação web progressiva.
+
+Quando instalado, ele pode ser aberto em uma janela própria, mantendo a mesma aplicação web e os mesmos recursos da versão acessada pelo navegador.
+
+A instalação não é obrigatória para transmitir ou assistir.
+
+---
+
+## Privacidade
+
+O Espelha não possui sistema próprio de contas e não foi projetado para armazenar gravações das transmissões.
+
+A captura da tela é iniciada somente após autorização explícita do usuário através do seletor fornecido pelo próprio navegador.
+
+O projeto também possui uma página dedicada de **Política de Privacidade** com informações sobre os serviços externos utilizados pelo site.
+
+---
+
+## Limitações atuais
+
+O projeto ainda utiliza uma arquitetura P2P simples.
+
+Isso significa que cada espectador representa uma nova transmissão enviada pelo computador de quem está compartilhando. Por isso, o modelo atual é mais adequado para transmissões entre pequenos grupos.
+
+Redes com NAT ou firewall mais restritivos também podem impedir uma conexão direta quando não é possível estabelecer uma rota WebRTC adequada.
+
+Outra limitação importante é a captura de tela em dispositivos móveis, já que navegadores móveis atualmente possuem restrições para compartilhar a tela completa do sistema.
+
+---
+
+## Possíveis evoluções
+
+* Servidor TURN próprio
+* Melhoria na estabilidade das conexões
+* Informações de qualidade da transmissão em tempo real
+* Seleção dinâmica de bitrate
+* Reconexão automática
+* Proteção opcional de salas
+* Melhorias para redes lentas
+* Arquitetura SFU para grupos maiores
+
+---
+
+## Status
+
+O Espelha está em desenvolvimento ativo.
+
+A versão atual já permite criar salas, compartilhar a tela e assistir à transmissão diretamente pelo navegador.
