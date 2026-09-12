@@ -1,0 +1,815 @@
+(() => {
+  "use strict";
+
+  const $ = (selector) => document.querySelector(selector);
+  const $$ = (selector) => [...document.querySelectorAll(selector)];
+
+  const els = {
+    landingView: $("#landingView"),
+    hostSetupView: $("#hostSetupView"),
+    joinView: $("#joinView"),
+    hostLiveView: $("#hostLiveView"),
+    viewerView: $("#viewerView"),
+    siteFooter: $("#siteFooter"),
+
+    openHostSetupBtn: $("#openHostSetupBtn"),
+    openJoinBtn: $("#openJoinBtn"),
+    startShareBtn: $("#startShareBtn"),
+    joinForm: $("#joinForm"),
+    roomInput: $("#roomInput"),
+
+    qualitySelect: $("#qualitySelect"),
+    fpsSelect: $("#fpsSelect"),
+    systemAudioToggle: $("#systemAudioToggle"),
+    micToggle: $("#micToggle"),
+
+    hostVideo: $("#hostVideo"),
+    roomCodeButton: $("#roomCodeButton"),
+    shareLinkInput: $("#shareLinkInput"),
+    copyLinkBtn: $("#copyLinkBtn"),
+    copyLinkIconBtn: $("#copyLinkIconBtn"),
+    stopShareBtn: $("#stopShareBtn"),
+    streamStats: $("#streamStats"),
+    viewerCountBadge: $("#viewerCountBadge"),
+    audienceEmpty: $("#audienceEmpty"),
+    audienceList: $("#audienceList"),
+    peerStatus: $("#peerStatus"),
+    systemAudioStatus: $("#systemAudioStatus"),
+    micStatus: $("#micStatus"),
+
+    viewerVideo: $("#viewerVideo"),
+    viewerWaiting: $("#viewerWaiting"),
+    viewerError: $("#viewerError"),
+    viewerErrorText: $("#viewerErrorText"),
+    viewerLiveState: $("#viewerLiveState"),
+    viewerTitle: $("#viewerTitle"),
+    viewerStatusText: $("#viewerStatusText"),
+    viewerSoundBtn: $("#viewerSoundBtn"),
+    fullscreenBtn: $("#fullscreenBtn"),
+    viewerStage: $("#viewerStage"),
+    installAppBtn: $("#installAppBtn"),
+    toast: $("#toast")
+  };
+
+  let role = null;
+  let roomId = null;
+  let peer = null;
+  let displayStream = null;
+  let micStream = null;
+  let outgoingStream = null;
+  const viewerConnections = new Map();
+  const viewerCalls = new Map();
+  let toastTimer = null;
+  let deferredInstallPrompt = null;
+  let isInstalled = false;
+
+  const PEER_PREFIX = "espelha-room-";
+  const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const SELECT_META = {
+    qualitySelect: {
+      triggerCaption: "Resolução desejada",
+      optionCaptions: {
+        "1080": "Full HD, mais nitidez",
+        "720": "Mais leve para rede e CPU",
+        auto: "Deixa o navegador ajustar"
+      }
+    },
+    fpsSelect: {
+      triggerCaption: "Taxa de quadros",
+      optionCaptions: {
+        "60": "Mais fluido, usa mais upload",
+        "30": "Mais leve e estável"
+      }
+    }
+  };
+
+  function showView(viewId) {
+    ["landingView", "hostSetupView", "joinView", "hostLiveView", "viewerView"].forEach((id) => {
+      els[id].classList.toggle("hidden", id !== viewId);
+    });
+    els.siteFooter?.classList.toggle("hidden", viewId === "hostLiveView" || viewId === "viewerView");
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }
+
+  function toast(message, type = "ok") {
+    clearTimeout(toastTimer);
+    els.toast.textContent = message;
+    els.toast.className = `toast show${type === "error" ? " error" : ""}`;
+    toastTimer = setTimeout(() => {
+      els.toast.className = "toast";
+    }, 2300);
+  }
+
+  function randomRoomId(length = 6) {
+    const bytes = new Uint8Array(length);
+    crypto.getRandomValues(bytes);
+    return [...bytes].map((n) => ROOM_ALPHABET[n % ROOM_ALPHABET.length]).join("");
+  }
+
+  function normalizeRoom(value) {
+    return String(value || "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, 8);
+  }
+
+  function roomPeerId(id) {
+    return `${PEER_PREFIX}${id.toLowerCase()}`;
+  }
+
+  function currentBaseUrl() {
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  }
+
+  function shareUrl(id) {
+    const url = new URL(currentBaseUrl());
+    url.searchParams.set("room", id);
+    return url.toString();
+  }
+
+  async function copyText(text, successMessage = "Copiado") {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(successMessage);
+    } catch {
+      const tmp = document.createElement("textarea");
+      tmp.value = text;
+      tmp.style.position = "fixed";
+      tmp.style.opacity = "0";
+      document.body.appendChild(tmp);
+      tmp.select();
+      document.execCommand("copy");
+      tmp.remove();
+      toast(successMessage);
+    }
+  }
+
+  function closeCustomSelect(root) {
+    if (!root) return;
+    root.classList.remove("open");
+    const trigger = root.querySelector("[data-select-trigger]");
+    const menu = root.querySelector("[data-select-menu]");
+    trigger?.setAttribute("aria-expanded", "false");
+    menu?.classList.add("hidden");
+  }
+
+  function closeAllCustomSelects(exceptRoot = null) {
+    $$("[data-custom-select]").forEach((root) => {
+      if (root !== exceptRoot) closeCustomSelect(root);
+    });
+  }
+
+  function initCustomSelects() {
+    $$("[data-custom-select]").forEach((root, index) => {
+      const select = root.querySelector("select");
+      const trigger = root.querySelector("[data-select-trigger]");
+      const menu = root.querySelector("[data-select-menu]");
+      const valueEl = root.querySelector("[data-select-value]");
+      const captionEl = root.querySelector("[data-select-caption]");
+      if (!select || !trigger || !menu || !valueEl || !captionEl) return;
+
+      const selectId = select.id || `custom-select-${index + 1}`;
+      if (!select.id) select.id = selectId;
+      const menuId = `${selectId}-menu`;
+      menu.id = menuId;
+      trigger.setAttribute("aria-controls", menuId);
+
+      const meta = SELECT_META[selectId] || { triggerCaption: "Selecionar", optionCaptions: {} };
+
+      const sync = () => {
+        const options = [...select.options];
+        const selectedOption = options.find((option) => option.selected) || options[select.selectedIndex] || options[0];
+        if (!selectedOption) return;
+
+        valueEl.textContent = selectedOption.textContent;
+        captionEl.textContent = meta.optionCaptions[selectedOption.value] || meta.triggerCaption || "Selecionar";
+
+        menu.innerHTML = options.map((option) => {
+          const selected = option.value === select.value;
+          return `
+            <button
+              type="button"
+              class="select-option${selected ? " is-selected" : ""}"
+              data-select-option
+              data-value="${escapeHtml(option.value)}"
+              role="option"
+              aria-selected="${selected ? "true" : "false"}"
+            >
+              <span class="select-option-copy">
+                <strong>${escapeHtml(option.textContent)}</strong>
+                <small>${escapeHtml(meta.optionCaptions[option.value] || "")}</small>
+              </span>
+              <span class="select-option-mark" aria-hidden="true">
+                <svg viewBox="0 0 16 16" fill="none">
+                  <path d="M3.5 8.5 6.5 11.5 12.5 4.5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </span>
+            </button>
+          `;
+        }).join("");
+      };
+
+      const openMenu = () => {
+        closeAllCustomSelects(root);
+        root.classList.add("open");
+        menu.classList.remove("hidden");
+        trigger.setAttribute("aria-expanded", "true");
+      };
+
+      const toggleMenu = () => {
+        if (root.classList.contains("open")) {
+          closeCustomSelect(root);
+        } else {
+          openMenu();
+        }
+      };
+
+      trigger.addEventListener("click", (event) => {
+        event.preventDefault();
+        toggleMenu();
+      });
+
+      trigger.addEventListener("keydown", (event) => {
+        if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) {
+          event.preventDefault();
+          openMenu();
+          menu.querySelector(`.select-option[data-value="${CSS.escape(select.value)}"]`)?.focus();
+        }
+      });
+
+      menu.addEventListener("click", (event) => {
+        const optionButton = event.target.closest("[data-select-option]");
+        if (!optionButton) return;
+        select.value = optionButton.dataset.value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        sync();
+        closeCustomSelect(root);
+        trigger.focus();
+      });
+
+      menu.addEventListener("keydown", (event) => {
+        const current = event.target.closest("[data-select-option]");
+        if (!current) return;
+        const options = [...menu.querySelectorAll("[data-select-option]")];
+        const index = options.indexOf(current);
+
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeCustomSelect(root);
+          trigger.focus();
+          return;
+        }
+
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          options[(index + 1) % options.length]?.focus();
+        } else if (event.key === "ArrowUp") {
+          event.preventDefault();
+          options[(index - 1 + options.length) % options.length]?.focus();
+        } else if (event.key === "Home") {
+          event.preventDefault();
+          options[0]?.focus();
+        } else if (event.key === "End") {
+          event.preventDefault();
+          options[options.length - 1]?.focus();
+        } else if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          current.click();
+        }
+      });
+
+      select.addEventListener("change", sync);
+      sync();
+    });
+
+    document.addEventListener("click", (event) => {
+      const root = event.target.closest("[data-custom-select]");
+      if (!root) closeAllCustomSelects();
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeAllCustomSelects();
+    });
+  }
+
+  function isStandaloneMode() {
+    return window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator.standalone === true;
+  }
+
+  function isIosDevice() {
+    return /iphone|ipad|ipod/i.test(window.navigator.userAgent || "");
+  }
+
+  function updateInstallButton() {
+    const button = els.installAppBtn;
+    if (!button) return;
+
+    if (isInstalled || isStandaloneMode()) {
+      button.disabled = true;
+      button.classList.add("is-installed");
+      button.innerHTML = `
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 12.5 4 4 8-9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        App instalado
+      `;
+      return;
+    }
+
+    button.disabled = false;
+    button.classList.remove("is-installed");
+    button.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 17.5v.7A1.8 1.8 0 0 0 6.8 20h10.4A1.8 1.8 0 0 0 19 18.2v-.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      Instalar
+    `;
+  }
+
+  async function installApp() {
+    if (isInstalled || isStandaloneMode()) {
+      toast("O app já está instalado.");
+      return;
+    }
+
+    if (deferredInstallPrompt) {
+      deferredInstallPrompt.prompt();
+      const outcome = await deferredInstallPrompt.userChoice.catch(() => null);
+      if (outcome?.outcome === "accepted") {
+        toast("Instalação iniciada.");
+      }
+      deferredInstallPrompt = null;
+      updateInstallButton();
+      return;
+    }
+
+    if (isIosDevice()) {
+      toast("No iPhone/iPad: Compartilhar → Adicionar à Tela de Início.");
+      return;
+    }
+
+    toast("Abra o menu do navegador e use a opção “Instalar app”.");
+  }
+
+  async function registerPwa() {
+    if ("serviceWorker" in navigator) {
+      try {
+        await navigator.serviceWorker.register("./sw.js");
+      } catch (error) {
+        console.warn("SW register failed:", error);
+      }
+    }
+
+    isInstalled = isStandaloneMode();
+    updateInstallButton();
+
+    window.addEventListener("beforeinstallprompt", (event) => {
+      event.preventDefault();
+      deferredInstallPrompt = event;
+      updateInstallButton();
+    });
+
+    window.addEventListener("appinstalled", () => {
+      isInstalled = true;
+      deferredInstallPrompt = null;
+      updateInstallButton();
+      toast("App instalado com sucesso.");
+    });
+  }
+
+  function buildDisplayConstraints() {
+    const quality = els.qualitySelect.value;
+    const fps = Number(els.fpsSelect.value) || 60;
+    const video = { frameRate: { ideal: fps, max: fps } };
+
+    if (quality === "1080") {
+      video.width = { ideal: 1920 };
+      video.height = { ideal: 1080 };
+    } else if (quality === "720") {
+      video.width = { ideal: 1280 };
+      video.height = { ideal: 720 };
+    }
+
+    return {
+      video,
+      audio: els.systemAudioToggle.checked
+    };
+  }
+
+  async function captureForHost() {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      throw new Error("Seu navegador não oferece suporte ao compartilhamento de tela.");
+    }
+
+    displayStream = await navigator.mediaDevices.getDisplayMedia(buildDisplayConstraints());
+
+    if (els.micToggle.checked) {
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } catch (error) {
+        micStream = null;
+        toast("Tela iniciada, mas o microfone não foi liberado.", "error");
+      }
+    }
+
+    outgoingStream = new MediaStream();
+    displayStream.getVideoTracks().forEach((track) => outgoingStream.addTrack(track));
+    displayStream.getAudioTracks().forEach((track) => outgoingStream.addTrack(track));
+    micStream?.getAudioTracks().forEach((track) => outgoingStream.addTrack(track));
+
+    const screenTrack = displayStream.getVideoTracks()[0];
+    screenTrack?.addEventListener("ended", () => stopHost(true), { once: true });
+
+    els.hostVideo.srcObject = displayStream;
+    await els.hostVideo.play().catch(() => {});
+
+    updateStreamUi();
+  }
+
+  function updateStreamUi() {
+    const track = displayStream?.getVideoTracks()[0];
+    const settings = track?.getSettings?.() || {};
+    const width = settings.width;
+    const height = settings.height;
+    const frameRate = settings.frameRate ? Math.round(settings.frameRate) : Number(els.fpsSelect.value);
+    const res = height ? `${height}p` : (els.qualitySelect.value === "auto" ? "Auto" : `${els.qualitySelect.value}p`);
+    els.streamStats.textContent = `${res} · ${frameRate || "—"} FPS`;
+    els.systemAudioStatus.textContent = displayStream?.getAudioTracks().length ? "Ativo" : "Sem áudio";
+    els.micStatus.textContent = micStream?.getAudioTracks().length ? "Ativo" : "Desligado";
+  }
+
+  function createPeer(id) {
+    if (typeof Peer === "undefined") {
+      throw new Error("A biblioteca de conexão não carregou. Verifique sua internet.");
+    }
+    return new Peer(id, {
+      debug: 1,
+      config: {
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" }
+        ],
+        sdpSemantics: "unified-plan"
+      }
+    });
+  }
+
+  async function startHost() {
+    els.startShareBtn.disabled = true;
+    els.startShareBtn.textContent = "Abrindo seletor...";
+
+    try {
+      await captureForHost();
+      role = "host";
+      roomId = randomRoomId();
+      showView("hostLiveView");
+      fillHostRoomUi();
+      connectHostPeer();
+    } catch (error) {
+      if (error?.name !== "NotAllowedError") {
+        toast(error.message || "Não foi possível iniciar a transmissão.", "error");
+      } else {
+        toast("Você cancelou o compartilhamento da tela.", "error");
+      }
+    } finally {
+      els.startShareBtn.disabled = false;
+      els.startShareBtn.textContent = "Escolher tela e iniciar";
+    }
+  }
+
+  function fillHostRoomUi() {
+    const url = shareUrl(roomId);
+    els.roomCodeButton.textContent = roomId;
+    els.shareLinkInput.value = url;
+    els.peerStatus.textContent = "Conectando...";
+  }
+
+  function connectHostPeer() {
+    const hostId = roomPeerId(roomId);
+    peer = createPeer(hostId);
+
+    peer.on("open", () => {
+      els.peerStatus.textContent = "Online";
+      history.replaceState(null, "", `?host=${roomId}`);
+    });
+
+    peer.on("connection", (conn) => {
+      conn.on("open", () => {
+        const viewerName = conn.metadata?.name || `Visitante ${String(conn.peer).slice(-4).toUpperCase()}`;
+        viewerConnections.set(conn.peer, { conn, viewerName, joinedAt: Date.now() });
+        renderAudience();
+        conn.send({ type: "host-ready", roomId });
+        sendStreamToViewer(conn.peer);
+      });
+
+      conn.on("close", () => removeViewer(conn.peer));
+      conn.on("error", () => removeViewer(conn.peer));
+    });
+
+    peer.on("error", (error) => {
+      console.error("Peer host error:", error);
+      if (error.type === "unavailable-id") {
+        // Extremely rare room collision; rebuild with another code.
+        roomId = randomRoomId();
+        fillHostRoomUi();
+        peer.destroy();
+        connectHostPeer();
+        return;
+      }
+      els.peerStatus.textContent = "Erro";
+      toast("Falha na sinalização WebRTC.", "error");
+    });
+
+    peer.on("disconnected", () => {
+      els.peerStatus.textContent = "Reconectando...";
+      if (!peer.destroyed) peer.reconnect();
+    });
+  }
+
+  function sendStreamToViewer(viewerPeerId) {
+    if (!peer || !outgoingStream || viewerCalls.has(viewerPeerId)) return;
+
+    const call = peer.call(viewerPeerId, outgoingStream, {
+      metadata: { roomId, kind: "screen" }
+    });
+
+    if (!call) return;
+    viewerCalls.set(viewerPeerId, call);
+
+    call.on("close", () => {
+      viewerCalls.delete(viewerPeerId);
+    });
+
+    call.on("error", () => {
+      viewerCalls.delete(viewerPeerId);
+    });
+  }
+
+  function removeViewer(peerId) {
+    viewerConnections.delete(peerId);
+    const call = viewerCalls.get(peerId);
+    if (call) {
+      try { call.close(); } catch {}
+      viewerCalls.delete(peerId);
+    }
+    renderAudience();
+  }
+
+  function renderAudience() {
+    const viewers = [...viewerConnections.entries()];
+    els.viewerCountBadge.textContent = String(viewers.length);
+    els.audienceEmpty.classList.toggle("hidden", viewers.length > 0);
+    els.audienceList.classList.toggle("hidden", viewers.length === 0);
+    els.audienceList.innerHTML = viewers.map(([id, info], index) => {
+      const label = info.viewerName;
+      const initial = label.trim().charAt(0).toUpperCase() || String(index + 1);
+      return `<div class="audience-item" data-peer="${escapeHtml(id)}">
+        <span class="audience-avatar">${escapeHtml(initial)}</span>
+        <div><strong>${escapeHtml(label)}</strong><small>Conexão P2P ativa</small></div>
+        <span class="audience-online" title="online"></span>
+      </div>`;
+    }).join("");
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>'"]/g, (char) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
+    }[char]));
+  }
+
+  function cleanupStreams() {
+    displayStream?.getTracks().forEach((track) => track.stop());
+    micStream?.getTracks().forEach((track) => track.stop());
+    displayStream = null;
+    micStream = null;
+    outgoingStream = null;
+    els.hostVideo.srcObject = null;
+  }
+
+  function stopHost(fromBrowserStop = false) {
+    if (role !== "host") return;
+
+    viewerConnections.forEach(({ conn }) => {
+      try { conn.send({ type: "host-ended" }); } catch {}
+      try { conn.close(); } catch {}
+    });
+    viewerCalls.forEach((call) => { try { call.close(); } catch {} });
+    viewerConnections.clear();
+    viewerCalls.clear();
+
+    if (peer) {
+      try { peer.destroy(); } catch {}
+      peer = null;
+    }
+
+    cleanupStreams();
+    role = null;
+    roomId = null;
+    history.replaceState(null, "", currentBaseUrl());
+    showView("landingView");
+    if (!fromBrowserStop) toast("Transmissão encerrada.");
+  }
+
+  function startViewer(id) {
+    roomId = normalizeRoom(id);
+    if (!roomId) {
+      toast("Digite um código de sala válido.", "error");
+      return;
+    }
+
+    role = "viewer";
+    showView("viewerView");
+    els.viewerTitle.textContent = `Sala ${roomId}`;
+    els.viewerStatusText.textContent = "Procurando transmissão...";
+    els.viewerWaiting.classList.remove("hidden");
+    els.viewerError.classList.add("hidden");
+    els.viewerVideo.srcObject = null;
+    els.viewerLiveState.className = "live-state waiting";
+    els.viewerLiveState.innerHTML = "<i></i> CONECTANDO";
+    history.replaceState(null, "", `?room=${roomId}`);
+
+    const viewerPeer = createPeer();
+    peer = viewerPeer;
+
+    let gotStream = false;
+    let connectionOpened = false;
+    let failTimer = null;
+
+    const fail = (message) => {
+      if (gotStream) return;
+      clearTimeout(failTimer);
+      els.viewerWaiting.classList.add("hidden");
+      els.viewerError.classList.remove("hidden");
+      els.viewerErrorText.textContent = message;
+      els.viewerStatusText.textContent = "Não conectado";
+      els.viewerLiveState.innerHTML = "<i></i> OFFLINE";
+    };
+
+    viewerPeer.on("open", () => {
+      const name = `Visitante ${String(viewerPeer.id).slice(-4).toUpperCase()}`;
+      const conn = viewerPeer.connect(roomPeerId(roomId), {
+        reliable: true,
+        metadata: { role: "viewer", name }
+      });
+
+      conn.on("open", () => {
+        connectionOpened = true;
+        els.viewerStatusText.textContent = "Sala encontrada. Recebendo vídeo...";
+        conn.send({ type: "viewer-ready" });
+        failTimer = setTimeout(() => fail("A sala foi encontrada, mas o vídeo não chegou. Tente recarregar a página."), 12000);
+      });
+
+      conn.on("data", (data) => {
+        if (data?.type === "host-ended") {
+          fail("A transmissão foi encerrada por quem estava compartilhando.");
+          els.viewerVideo.srcObject = null;
+        }
+      });
+
+      conn.on("close", () => {
+        if (gotStream) {
+          els.viewerStatusText.textContent = "Transmissão encerrada";
+          els.viewerLiveState.innerHTML = "<i></i> ENCERRADA";
+        } else if (connectionOpened) {
+          fail("A transmissão foi encerrada antes do vídeo começar.");
+        }
+      });
+
+      conn.on("error", () => fail("Não foi possível conectar à sala."));
+    });
+
+    viewerPeer.on("call", (call) => {
+      if (call.metadata?.roomId && normalizeRoom(call.metadata.roomId) !== roomId) {
+        call.close();
+        return;
+      }
+
+      call.answer();
+      call.on("stream", async (stream) => {
+        gotStream = true;
+        clearTimeout(failTimer);
+        els.viewerVideo.srcObject = stream;
+        els.viewerWaiting.classList.add("hidden");
+        els.viewerError.classList.add("hidden");
+        els.viewerLiveState.className = "live-state";
+        els.viewerLiveState.innerHTML = "<i></i> AO VIVO";
+        els.viewerStatusText.textContent = "Transmissão P2P ativa";
+        try {
+          await els.viewerVideo.play();
+        } catch {
+          els.viewerVideo.muted = true;
+          els.viewerSoundBtn.textContent = "Ativar som";
+          toast("Clique em “Ativar som” para ouvir a transmissão.");
+          await els.viewerVideo.play().catch(() => {});
+        }
+      });
+
+      call.on("close", () => {
+        if (gotStream) {
+          els.viewerStatusText.textContent = "Transmissão encerrada";
+          els.viewerLiveState.innerHTML = "<i></i> ENCERRADA";
+          els.viewerVideo.srcObject = null;
+          fail("A transmissão foi encerrada.");
+        }
+      });
+    });
+
+    viewerPeer.on("error", (error) => {
+      console.error("Peer viewer error:", error);
+      if (error.type === "peer-unavailable") {
+        fail("Essa sala não existe ou a transmissão já foi encerrada.");
+      } else if (error.type === "network" || error.type === "server-error" || error.type === "socket-error") {
+        fail("Falha ao acessar o serviço de sinalização. Verifique sua conexão e tente novamente.");
+      } else {
+        fail("Não foi possível estabelecer a conexão WebRTC.");
+      }
+    });
+
+    failTimer = setTimeout(() => {
+      if (!connectionOpened && !gotStream) {
+        fail("A sala demorou demais para responder. Confira o código e tente novamente.");
+      }
+    }, 10000);
+  }
+
+  function leaveViewer() {
+    if (role !== "viewer") return;
+    if (peer) {
+      try { peer.destroy(); } catch {}
+      peer = null;
+    }
+    els.viewerVideo.srcObject = null;
+    role = null;
+  }
+
+  initCustomSelects();
+  registerPwa();
+
+  // Navigation
+  els.openHostSetupBtn.addEventListener("click", () => showView("hostSetupView"));
+  els.installAppBtn?.addEventListener("click", installApp);
+  els.openJoinBtn.addEventListener("click", () => showView("joinView"));
+  $$('[data-back]').forEach((button) => button.addEventListener("click", () => showView(button.dataset.back)));
+  els.startShareBtn.addEventListener("click", startHost);
+
+  els.joinForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const id = normalizeRoom(els.roomInput.value);
+    els.roomInput.value = id;
+    startViewer(id);
+  });
+
+  els.roomInput.addEventListener("input", () => {
+    const pos = els.roomInput.selectionStart;
+    els.roomInput.value = normalizeRoom(els.roomInput.value);
+    try { els.roomInput.setSelectionRange(pos, pos); } catch {}
+  });
+
+  els.copyLinkBtn.addEventListener("click", () => copyText(shareUrl(roomId), "Link copiado"));
+  els.copyLinkIconBtn.addEventListener("click", () => copyText(shareUrl(roomId), "Link copiado"));
+  els.roomCodeButton.addEventListener("click", () => copyText(roomId, "Código copiado"));
+  els.stopShareBtn.addEventListener("click", () => stopHost(false));
+
+  els.viewerSoundBtn.addEventListener("click", async () => {
+    els.viewerVideo.muted = !els.viewerVideo.muted;
+    if (!els.viewerVideo.muted) {
+      await els.viewerVideo.play().catch(() => {});
+    }
+    els.viewerSoundBtn.textContent = els.viewerVideo.muted ? "Ativar som" : "Som: ligado";
+  });
+
+  els.fullscreenBtn.addEventListener("click", async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await els.viewerStage.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch {
+      toast("Seu navegador bloqueou a tela cheia.", "error");
+    }
+  });
+
+  document.addEventListener("fullscreenchange", () => {
+    els.fullscreenBtn.textContent = document.fullscreenElement ? "Sair da tela cheia" : "Tela cheia";
+  });
+
+  window.addEventListener("beforeunload", () => {
+    if (role === "host") {
+      viewerConnections.forEach(({ conn }) => {
+        try { conn.send({ type: "host-ended" }); } catch {}
+      });
+      cleanupStreams();
+    } else if (role === "viewer") {
+      leaveViewer();
+    }
+  });
+
+  // Deep link: ?room=ABC123 opens directly as viewer.
+  const params = new URLSearchParams(window.location.search);
+  const roomFromUrl = normalizeRoom(params.get("room"));
+  if (roomFromUrl) {
+    startViewer(roomFromUrl);
+  } else {
+    showView("landingView");
+  }
+})();

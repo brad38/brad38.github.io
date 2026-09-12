@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0b0d10" />
+  <meta name="description" content="Espelhamento de tela P2P pelo navegador usando WebRTC." />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Espelha" />
+  <title>Espelha — compartilhe sua tela</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="Espelha - início">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <rect x="3" y="5" width="18" height="12" rx="3" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M8 20h8M12 17v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          <path d="M8.5 9.5h7M8.5 12.5h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span>Espelha</span>
+    </a>
+
+    <div class="topbar-right">
+      <span class="secure-pill">P2P criptografado</span>
+      <a class="ghost-link" href="https://github.com/" target="_blank" rel="noreferrer">GitHub</a>
+    </div>
+  </header>
+
+  <main>
+    <section id="landingView" class="view landing-view">
+      <div class="hero-copy">
+        <div class="eyebrow">SCREEN SHARE · WEBRTC</div>
+        <h1>Sua tela pros cria.<br><span>Sem Discord.</span></h1>
+        <p class="hero-subtitle">Compartilhe uma tela, janela ou aba direto do navegador. Seus amigos entram pelo link, sem conta e sem instalar nada.</p>
+
+        <div class="hero-actions">
+          <button id="openHostSetupBtn" class="btn btn-primary btn-lg">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6.8A2.8 2.8 0 0 1 6.8 4h10.4A2.8 2.8 0 0 1 20 6.8v6.4a2.8 2.8 0 0 1-2.8 2.8H6.8A2.8 2.8 0 0 1 4 13.2V6.8Z" stroke="currentColor" stroke-width="1.8"/><path d="M9 20h6M12 16v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            Compartilhar minha tela
+          </button>
+          <button id="openJoinBtn" class="btn btn-secondary btn-lg">Entrar em uma sala</button>
+        </div>
+
+        <div class="install-wrap">
+          <button id="installAppBtn" class="btn btn-install btn-lg">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 17.5v.7A1.8 1.8 0 0 0 6.8 20h10.4A1.8 1.8 0 0 0 19 18.2v-.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            Instalar
+          </button>
+        </div>
+
+      </div>
+
+      <div class="hero-visual" aria-hidden="true">
+        <div class="window-shell">
+          <div class="window-top">
+            <div class="traffic"><b></b><b></b><b></b></div>
+            <div class="url-bar">espelha.github.io/sala/<strong>7K2B9A</strong></div>
+            <span class="live-mini"><i></i> AO VIVO</span>
+          </div>
+          <div class="screen-demo">
+            <div class="screen-sidebar">
+              <span class="demo-logo"></span>
+              <span></span><span></span><span></span><span></span>
+            </div>
+            <div class="screen-content">
+              <div class="demo-toolbar"></div>
+              <div class="demo-stage">
+                <div class="demo-card big"></div>
+                <div class="demo-row"><div class="demo-card"></div><div class="demo-card"></div></div>
+              </div>
+            </div>
+            <div class="viewer-badge"><span class="avatar-stack"><i>G</i><i>L</i><i>R</i></span><strong>3 assistindo</strong></div>
+          </div>
+        </div>
+        <div class="float-card float-a"><span class="float-icon">60</span><div><small>FLUIDEZ</small><strong>FPS</strong></div></div>
+        <div class="float-card float-b"><span class="signal-bars"><i></i><i></i><i></i></span><div><small>CONEXÃO</small><strong>P2P</strong></div></div>
+      </div>
+    </section>
+
+    <section id="hostSetupView" class="view setup-view hidden">
+      <div class="panel setup-panel">
+        <button class="back-btn" data-back="landingView" aria-label="Voltar"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 6 9 12l6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="panel-heading">
+          <span class="section-kicker">NOVA TRANSMISSÃO</span>
+          <h2>Como você quer transmitir?</h2>
+          <p>O navegador ainda vai pedir para você escolher a tela, janela ou aba.</p>
+        </div>
+
+        <div class="setup-grid">
+          <label class="field-card">
+            <span class="field-label">Qualidade</span>
+            <div class="custom-select" data-custom-select>
+              <select id="qualitySelect" class="native-select">
+                <option value="1080" selected>1080p</option>
+                <option value="720">720p</option>
+                <option value="auto">Automática</option>
+              </select>
+              <button type="button" class="select-trigger" data-select-trigger aria-haspopup="listbox" aria-expanded="false">
+                <span class="select-trigger-copy">
+                  <strong data-select-value>1080p</strong>
+                  <small data-select-caption>Resolução desejada</small>
+                </span>
+                <span class="select-chevron" aria-hidden="true">
+                  <svg viewBox="0 0 20 20" fill="none"><path d="M5 7.5 10 12.5 15 7.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </span>
+              </button>
+              <div class="select-menu hidden" data-select-menu role="listbox" aria-label="Qualidade"></div>
+            </div>
+            <span class="field-help">Resolução desejada. O navegador pode ajustar.</span>
+          </label>
+
+          <label class="field-card">
+            <span class="field-label">Fluidez</span>
+            <div class="custom-select" data-custom-select>
+              <select id="fpsSelect" class="native-select">
+                <option value="60" selected>60 FPS</option>
+                <option value="30">30 FPS</option>
+              </select>
+              <button type="button" class="select-trigger" data-select-trigger aria-haspopup="listbox" aria-expanded="false">
+                <span class="select-trigger-copy">
+                  <strong data-select-value>60 FPS</strong>
+                  <small data-select-caption>Taxa de quadros</small>
+                </span>
+                <span class="select-chevron" aria-hidden="true">
+                  <svg viewBox="0 0 20 20" fill="none"><path d="M5 7.5 10 12.5 15 7.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </span>
+              </button>
+              <div class="select-menu hidden" data-select-menu role="listbox" aria-label="Fluidez"></div>
+            </div>
+            <span class="field-help">60 FPS usa mais upload e CPU.</span>
+          </label>
+        </div>
+
+        <div class="toggle-list">
+          <label class="toggle-row">
+            <span><strong>Áudio da tela</strong><small>Inclui áudio quando o navegador/sistema permitir.</small></span>
+            <input id="systemAudioToggle" type="checkbox" checked />
+            <i class="toggle-ui"></i>
+          </label>
+          <label class="toggle-row">
+            <span><strong>Microfone</strong><small>Mistura sua voz com a transmissão.</small></span>
+            <input id="micToggle" type="checkbox" />
+            <i class="toggle-ui"></i>
+          </label>
+        </div>
+
+        <div class="setup-footer">
+          <div class="privacy-note">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2M6 10h12v10H6V10Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+            O vídeo não é gravado por este site.
+          </div>
+          <button id="startShareBtn" class="btn btn-primary btn-lg">Escolher tela e iniciar</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="joinView" class="view setup-view hidden">
+      <div class="panel join-panel">
+        <button class="back-btn" data-back="landingView" aria-label="Voltar"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 6 9 12l6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="panel-heading">
+          <span class="section-kicker">ENTRAR NA SALA</span>
+          <h2>Digite o código</h2>
+          <p>Você também pode simplesmente abrir o link enviado por quem está transmitindo.</p>
+        </div>
+        <form id="joinForm" class="join-form">
+          <label for="roomInput">Código da sala</label>
+          <input id="roomInput" maxlength="8" autocomplete="off" spellcheck="false" />
+          <button class="btn btn-primary btn-lg" type="submit">Assistir transmissão</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="hostLiveView" class="view live-view hidden">
+      <div class="live-head">
+        <div>
+          <span class="live-state"><i></i> AO VIVO</span>
+          <h2>Transmitindo sua tela</h2>
+        </div>
+        <div class="live-actions">
+          <button id="copyLinkBtn" class="btn btn-secondary">Copiar link</button>
+          <button id="stopShareBtn" class="btn btn-danger">Encerrar</button>
+        </div>
+      </div>
+
+      <div class="broadcast-layout">
+        <div class="video-card host-video-card">
+          <video id="hostVideo" autoplay muted playsinline></video>
+          <div id="hostVideoPlaceholder" class="video-placeholder hidden">Prévia indisponível</div>
+          <div class="video-overlay top-left"><span class="record-dot"></span> VOCÊ</div>
+          <div id="streamStats" class="video-overlay bottom-right">1080p · 60 FPS</div>
+        </div>
+
+        <aside class="broadcast-side">
+          <div class="side-card room-card">
+            <span class="side-label">CÓDIGO DA SALA</span>
+            <button id="roomCodeButton" class="room-code" title="Copiar código">------</button>
+            <div class="share-link-wrap">
+              <input id="shareLinkInput" readonly />
+              <button id="copyLinkIconBtn" title="Copiar link" aria-label="Copiar link">⧉</button>
+            </div>
+          </div>
+
+          <div class="side-card audience-card">
+            <div class="audience-top"><span class="side-label">AUDIÊNCIA</span><span id="viewerCountBadge" class="count-badge">0</span></div>
+            <div id="audienceEmpty" class="audience-empty">
+              <span class="radar"><i></i></span>
+              <strong>Aguardando os cria...</strong>
+              <small>Compartilhe o link para alguém entrar.</small>
+            </div>
+            <div id="audienceList" class="audience-list hidden"></div>
+          </div>
+
+          <div class="side-card tech-card">
+            <div><span>Conexão</span><strong id="peerStatus">Conectando...</strong></div>
+            <div><span>Áudio da tela</span><strong id="systemAudioStatus">—</strong></div>
+            <div><span>Microfone</span><strong id="micStatus">—</strong></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="viewerView" class="view viewer-view hidden">
+      <div class="viewer-topbar">
+        <div class="viewer-room-info">
+          <span id="viewerLiveState" class="live-state waiting"><i></i> CONECTANDO</span>
+          <div><strong id="viewerTitle">Sala ------</strong><small id="viewerStatusText">Procurando transmissão...</small></div>
+        </div>
+        <div class="viewer-controls">
+          <button id="viewerSoundBtn" class="btn btn-secondary">Som: ligado</button>
+          <button id="fullscreenBtn" class="btn btn-secondary">Tela cheia</button>
+        </div>
+      </div>
+
+      <div id="viewerStage" class="viewer-stage">
+        <video id="viewerVideo" autoplay playsinline></video>
+        <div id="viewerWaiting" class="viewer-waiting">
+          <span class="spinner"></span>
+          <h2>Conectando à transmissão</h2>
+          <p>Isso normalmente leva só alguns segundos.</p>
+        </div>
+        <div id="viewerError" class="viewer-error hidden">
+          <div class="error-icon">!</div>
+          <h2>Não foi possível entrar</h2>
+          <p id="viewerErrorText">A sala pode ter sido encerrada ou não existe.</p>
+          <a class="btn btn-primary" href="./">Voltar ao início</a>
+        </div>
+      </div>
+    </section>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
