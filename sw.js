@@ -2,6 +2,7 @@ const CACHE_NAME = 'espelha-v2';
 const ASSETS = [
   './',
   './index.html',
+  './privacidade.html',
   './styles.css',
   './app.js',
   './manifest.webmanifest',
