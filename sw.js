@@ -1,4 +1,4 @@
-const CACHE_NAME = 'espelha-v8';
+const CACHE_NAME = 'espelha-v21';
 const ASSETS = [
   './',
   './index.html',

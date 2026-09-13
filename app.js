@@ -656,15 +656,21 @@
 
   function buildDisplayConstraints() {
     const quality = els.qualitySelect.value;
-    const fps = Number(els.fpsSelect.value) || 60;
+    const requestedFps = Number(els.fpsSelect.value) || 60;
+    const fps = selectedDeliveryMode() === "quality" ? Math.min(60, requestedFps) : requestedFps;
     const video = { frameRate: { ideal: fps, max: fps } };
 
     if (quality === "1080") {
-      video.width = { ideal: 1920 };
-      video.height = { ideal: 1080 };
+      video.width = { ideal: 1920, max: 1920 };
+      video.height = { ideal: 1080, max: 1080 };
     } else if (quality === "720") {
-      video.width = { ideal: 1280 };
-      video.height = { ideal: 720 };
+      video.width = { ideal: 1280, max: 1280 };
+      video.height = { ideal: 720, max: 720 };
+    } else if (selectedDeliveryMode() === "quality") {
+      // Auto no modo HQ também fica limitado a 1080p para evitar que uma
+      // tela 1440p/4K seja enviada diretamente ao encoder WebCodecs.
+      video.width = { ideal: 1920, max: 1920 };
+      video.height = { ideal: 1080, max: 1080 };
     }
 
     return {
@@ -700,11 +706,17 @@
 
     const screenTrack = displayStream.getVideoTracks()[0];
     if (screenTrack) {
-      const fps = Number(els.fpsSelect.value) || 60;
+      const requestedFps = Number(els.fpsSelect.value) || 60;
       const deliveryMode = selectedDeliveryMode();
+      const fps = deliveryMode === "quality" ? Math.min(60, requestedFps) : requestedFps;
       try { screenTrack.contentHint = deliveryMode === "quality" ? "detail" : "motion"; } catch {}
       try {
-        await screenTrack.applyConstraints({ frameRate: { ideal: fps, max: fps } });
+        const constraints = { frameRate: { ideal: fps, max: fps } };
+        if (deliveryMode === "quality") {
+          constraints.width = { ideal: 1920, max: 1920 };
+          constraints.height = { ideal: 1080, max: 1080 };
+        }
+        await screenTrack.applyConstraints(constraints);
       } catch (error) {
         console.debug("O navegador limitou a taxa de quadros da captura:", error);
       }
@@ -1144,7 +1156,7 @@
     qualityHost = window.EspelhaQuality.createHost({
       getStream: () => outgoingStream,
       getBitrateBps: () => selectedBitrateBps() || 12_000_000,
-      getFps: () => Number(els.fpsSelect?.value) || 60,
+      getFps: () => selectedDeliveryMode() === "quality" ? Math.min(60, Number(els.fpsSelect?.value) || 60) : (Number(els.fpsSelect?.value) || 60),
       onStatus: (text) => {
         if (els.encoderStatus) els.encoderStatus.textContent = text;
       },
@@ -1256,6 +1268,10 @@
       onUnsupported: () => {
         try { conn?.send?.({ type: "hq-unsupported" }); } catch {}
         els.viewerStatusText.textContent = "WebCodecs indisponível · alternando para baixa latência";
+      },
+      onStartupTimeout: () => {
+        try { conn?.send?.({ type: "hq-unsupported" }); } catch {}
+        els.viewerStatusText.textContent = "Alta qualidade não recebeu vídeo a tempo · usando WebRTC";
       },
       onDelayChange: (extraDelayMs) => adjustViewerQualityAudioDelay(extraDelayMs)
     });
@@ -1532,7 +1548,7 @@
           els.viewerStatusText.textContent = "Alta qualidade · iniciando encoder...";
           return;
         }
-        if (data?.type === "hq-start" || data?.type === "hq-config" || data?.type === "hq-video" || data?.type === "hq-end") {
+        if (data?.type === "hq-start" || data?.type === "hq-config" || data?.type === "hq-video" || data?.type === "hq-video-fragment" || data?.type === "hq-end") {
           const quality = ensureQualityViewer(conn);
           if (!quality) {
             try { conn.send({ type: "hq-unsupported" }); } catch {}
