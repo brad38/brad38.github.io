@@ -167,13 +167,13 @@
               </button>
               <div class="select-menu hidden" data-select-menu role="listbox" aria-label="Bitrate"></div>
             </div>
-            <span class="field-help">É o teto por espectador; o WebRTC pode usar menos.</span>
+            <span class="field-help">No modo baixa latência é o teto do WebRTC; no modo alta qualidade define o bitrate do stream bufferizado.</span>
           </label>
         </div>
 
         <div class="hardware-note">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="3" stroke="currentColor" stroke-width="1.7"/><path d="M8 3v3M12 3v3M16 3v3M8 18v3M12 18v3M16 18v3M1 9h3M1 13h3M20 9h3M20 13h3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-          <span><strong>H.264 preferido para transmissão.</strong> A aceleração é decidida pelo navegador; em uma GPU NVIDIA compatível ele pode usar NVENC, mas uma página web não consegue forçar o NVENC diretamente.</span>
+          <span><strong>Baixa latência prefere H.264.</strong> O navegador decide a aceleração por hardware/NVENC. Em Alta qualidade, o Espelha usa um fluxo bufferizado via MediaRecorder para conseguir manter vários segundos carregados à frente.</span>
         </div>
 
         <div class="delivery-mode-block">
@@ -194,7 +194,7 @@
                 <span class="delivery-mode-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-9Z" stroke="currentColor" stroke-width="1.8"/><path d="m8 14 2.4-2.7 2 2 2.6-3 3 3.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="9" r="1.2" fill="currentColor"/></svg>
                 </span>
-                <span><strong>Alta qualidade</strong><small>Espera pelo menos 5 s antes de começar e mantém um buffer maior (~7 s) para priorizar estabilidade e qualidade.</small></span>
+                <span><strong>Alta qualidade</strong><small>Só começa quando há pelo menos 5 s realmente carregados à frente. Se o buffer cair, pausa e recarrega antes de continuar, priorizando reprodução lisa em vez de latência.</small></span>
               </span>
             </label>
           </div>
