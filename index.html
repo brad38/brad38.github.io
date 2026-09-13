@@ -194,7 +194,7 @@
                 <span class="delivery-mode-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-9Z" stroke="currentColor" stroke-width="1.8"/><path d="m8 14 2.4-2.7 2 2 2.6-3 3 3.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="9" r="1.2" fill="currentColor"/></svg>
                 </span>
-                <span><strong>Alta qualidade</strong><small>Usa um buffer maior (~5 s) para priorizar estabilidade e qualidade, mesmo com bastante atraso.</small></span>
+                <span><strong>Alta qualidade</strong><small>Espera pelo menos 5 s antes de começar e mantém um buffer maior (~7 s) para priorizar estabilidade e qualidade.</small></span>
               </span>
             </label>
           </div>
@@ -304,7 +304,7 @@
       </div>
 
       <div id="viewerStage" class="viewer-stage">
-        <video id="viewerVideo" autoplay playsinline></video>
+        <video id="viewerVideo" playsinline></video>
         <div id="viewerWaiting" class="viewer-waiting">
           <span class="spinner"></span>
           <h2>Conectando à transmissão</h2>

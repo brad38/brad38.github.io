@@ -438,14 +438,17 @@
     return mode === "quality" ? "Alta qualidade" : "Baixa latência";
   }
 
+  // O modo de alta qualidade trabalha deliberadamente atrás do tempo real.
+  // Mantemos um alvo maior que o pré-carregamento inicial para dar margem a oscilações.
+  const HIGH_QUALITY_BUFFER_MS = 7000;
+  const HIGH_QUALITY_PREROLL_MS = 5500;
+
   async function configureReceiverBuffer(call, mode) {
     const highQuality = mode === "quality";
-    // Em alta qualidade, aceitamos bastante atraso para absorver oscilações de rede.
-    // O navegador ainda pode limitar internamente esse alvo.
-    const targetMs = highQuality ? 5000 : 0;
+    const targetMs = highQuality ? HIGH_QUALITY_BUFFER_MS : 0;
     const targetSeconds = targetMs / 1000;
 
-    for (let attempt = 0; attempt < 40; attempt += 1) {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
       const receivers = call?.peerConnection?.getReceivers?.().filter((receiver) => receiver.track && ["video", "audio"].includes(receiver.track.kind)) || [];
       if (receivers.length) {
         for (const receiver of receivers) {
@@ -460,9 +463,33 @@
             console.warn("Não foi possível ajustar o buffer do receptor:", error);
           }
         }
-        return;
+        return true;
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return false;
+  }
+
+  async function waitForQualityPreroll() {
+    const startedAt = performance.now();
+    let lastSecond = null;
+
+    while (true) {
+      const elapsed = performance.now() - startedAt;
+      const remaining = Math.max(0, HIGH_QUALITY_PREROLL_MS - elapsed);
+      const seconds = Math.ceil(remaining / 1000);
+
+      if (seconds !== lastSecond) {
+        lastSecond = seconds;
+        if (els.viewerStatusText) {
+          els.viewerStatusText.textContent = seconds > 0
+            ? `Alta qualidade · carregando ${seconds}s antes de reproduzir`
+            : "Alta qualidade · buffer pronto";
+        }
+      }
+
+      if (remaining <= 0) break;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(250, remaining)));
     }
   }
 
@@ -946,20 +973,24 @@
 
       const deliveryMode = call.metadata?.deliveryMode === "quality" ? "quality" : "latency";
       call.answer(undefined, { sdpTransform: preferH264Sdp });
-      configureReceiverBuffer(call, deliveryMode);
       call.on("stream", async (stream) => {
         gotStream = true;
         clearTimeout(failTimer);
+
+        // O vídeo do espectador não usa autoplay. No modo de alta qualidade,
+        // o RTP continua chegando enquanto a reprodução fica pausada, permitindo
+        // que o jitter buffer acumule mídia antes do primeiro frame ser exibido.
+        els.viewerVideo.pause();
         els.viewerVideo.srcObject = stream;
         els.viewerError.classList.add("hidden");
         els.viewerLiveState.className = "live-state";
         els.viewerLiveState.innerHTML = "<i></i> AO VIVO";
 
+        await configureReceiverBuffer(call, deliveryMode);
+
         if (deliveryMode === "quality") {
-          els.viewerStatusText.textContent = "Alta qualidade · preparando buffer (~5 s)";
-          // Segura a reprodução por um instante para o receptor acumular mídia antes de começar.
-          await new Promise((resolve) => setTimeout(resolve, 1800));
-          els.viewerStatusText.textContent = "Alta qualidade · buffer ampliado (~5 s)";
+          await waitForQualityPreroll();
+          els.viewerStatusText.textContent = "Alta qualidade · ~7 s atrás do tempo real";
         } else {
           els.viewerStatusText.textContent = "Baixa latência · buffer mínimo";
         }
