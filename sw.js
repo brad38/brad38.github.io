@@ -1,10 +1,11 @@
-const CACHE_NAME = 'espelha-v6';
+const CACHE_NAME = 'espelha-v7';
 const ASSETS = [
   './',
   './index.html',
   './privacidade.html',
   './styles.css',
   './app.js',
+  './quality-mode.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',

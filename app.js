@@ -43,6 +43,7 @@
     micStatus: $("#micStatus"),
 
     viewerVideo: $("#viewerVideo"),
+    viewerCanvas: $("#viewerCanvas"),
     viewerWaiting: $("#viewerWaiting"),
     viewerError: $("#viewerError"),
     viewerErrorText: $("#viewerErrorText"),
@@ -65,6 +66,11 @@
   const viewerConnections = new Map();
   const viewerCalls = new Map();
   const bufferedRecorders = new Map();
+  const qualityAudioCalls = new Map();
+  let qualityHost = null;
+  let qualityViewer = null;
+  let qualityAudioMixerState = null;
+  let viewerQualityAudioState = null;
   let viewerBufferedState = null;
   let toastTimer = null;
   let deferredInstallPrompt = null;
@@ -688,6 +694,10 @@
     displayStream.getAudioTracks().forEach((track) => outgoingStream.addTrack(track));
     micStream?.getAudioTracks().forEach((track) => outgoingStream.addTrack(track));
 
+    if (selectedDeliveryMode() === "quality" && outgoingStream.getAudioTracks().length) {
+      prepareQualityAudioMixer().catch(() => {});
+    }
+
     const screenTrack = displayStream.getVideoTracks()[0];
     if (screenTrack) {
       const fps = Number(els.fpsSelect.value) || 60;
@@ -719,7 +729,7 @@
     els.streamStats.textContent = `${res} · ${frameRate || "—"} FPS · ${bitrateLabel}`;
     if (els.deliveryModeStatus) els.deliveryModeStatus.textContent = deliveryModeLabel(deliveryMode);
     if (els.bitrateStatus) els.bitrateStatus.textContent = els.bitrateSelect?.value === "auto" ? "Automático" : `Máx. ${els.bitrateSelect?.value} Mbps`;
-    if (els.encoderStatus) els.encoderStatus.textContent = deliveryMode === "quality" ? "Bufferizado (MediaRecorder)" : "H.264 preferido";
+    if (els.encoderStatus) els.encoderStatus.textContent = deliveryMode === "quality" ? "WebCodecs · aguardando espectador" : "H.264 preferido";
     els.systemAudioStatus.textContent = displayStream?.getAudioTracks().length ? "Ativo" : "Sem áudio";
     els.micStatus.textContent = micStream?.getAudioTracks().length ? "Ativo" : "Desligado";
   }
@@ -1062,6 +1072,196 @@
     els.peerStatus.textContent = "Conectando...";
   }
 
+  function qualityWebCodecsAvailable() {
+    return Boolean(window.EspelhaQuality?.hostSupported?.());
+  }
+
+  async function prepareQualityAudioMixer() {
+    if (qualityAudioMixerState?.stream) return qualityAudioMixerState.stream;
+    const tracks = outgoingStream?.getAudioTracks?.() || [];
+    if (!tracks.length) return null;
+
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) return null;
+
+    try {
+      const context = new AudioContextCtor({ latencyHint: "interactive" });
+      const destination = context.createMediaStreamDestination();
+      const sources = [];
+      for (const track of tracks) {
+        const source = context.createMediaStreamSource(new MediaStream([track]));
+        source.connect(destination);
+        sources.push(source);
+      }
+      try { await context.resume(); } catch {}
+      qualityAudioMixerState = { context, destination, sources, stream: destination.stream };
+      return destination.stream;
+    } catch (error) {
+      console.warn("Não foi possível preparar o mixer de áudio do modo alta qualidade:", error);
+      qualityAudioMixerState = null;
+      return null;
+    }
+  }
+
+  function stopQualityAudioMixer() {
+    qualityAudioCalls.forEach((call) => { try { call.close(); } catch {} });
+    qualityAudioCalls.clear();
+    if (qualityAudioMixerState) {
+      try { qualityAudioMixerState.sources?.forEach((source) => source.disconnect()); } catch {}
+      try { qualityAudioMixerState.destination?.disconnect?.(); } catch {}
+      try { qualityAudioMixerState.context?.close?.(); } catch {}
+      qualityAudioMixerState = null;
+    }
+  }
+
+  async function sendQualityAudioToViewer(viewerPeerId) {
+    if (!peer || qualityAudioCalls.has(viewerPeerId)) return;
+    const audioStream = await prepareQualityAudioMixer();
+    if (!audioStream?.getAudioTracks?.().length) return;
+
+    try {
+      const call = peer.call(viewerPeerId, audioStream, {
+        metadata: {
+          roomId,
+          kind: "hq-audio",
+          deliveryMode: "quality",
+          delayMs: window.EspelhaQuality?.TARGET_DELAY_MS || 10_000
+        }
+      });
+      if (!call) return;
+      qualityAudioCalls.set(viewerPeerId, call);
+      call.on("close", () => qualityAudioCalls.delete(viewerPeerId));
+      call.on("error", () => qualityAudioCalls.delete(viewerPeerId));
+    } catch (error) {
+      console.warn("Não foi possível enviar o áudio do modo alta qualidade:", error);
+    }
+  }
+
+  function createQualityHostIfNeeded() {
+    if (qualityHost) return qualityHost;
+    if (!window.EspelhaQuality?.createHost) return null;
+
+    qualityHost = window.EspelhaQuality.createHost({
+      getStream: () => outgoingStream,
+      getBitrateBps: () => selectedBitrateBps() || 12_000_000,
+      getFps: () => Number(els.fpsSelect?.value) || 60,
+      onStatus: (text) => {
+        if (els.encoderStatus) els.encoderStatus.textContent = text;
+      },
+      onStats: (stats) => {
+        if (els.bitrateStatus && Number.isFinite(stats?.mbps)) {
+          const configured = els.bitrateSelect?.value;
+          const suffix = configured === "auto" ? "auto" : `máx. ${configured}`;
+          els.bitrateStatus.textContent = `${stats.mbps.toFixed(1)} Mbps · ${suffix}`;
+        }
+      }
+    });
+    return qualityHost;
+  }
+
+  async function startQualityStreamToViewer(viewerPeerId) {
+    if (!qualityWebCodecsAvailable()) return false;
+    const viewer = viewerConnections.get(viewerPeerId);
+    const conn = viewer?.conn;
+    if (!conn?.open) return false;
+
+    try {
+      const host = createQualityHostIfNeeded();
+      if (!host) return false;
+      const ok = await host.addViewer(viewerPeerId, conn);
+      if (!ok) return false;
+      sendQualityAudioToViewer(viewerPeerId);
+      return true;
+    } catch (error) {
+      console.warn("Modo alta qualidade WebCodecs não iniciou:", error);
+      return false;
+    }
+  }
+
+  function cleanupViewerQualityAudio() {
+    const state = viewerQualityAudioState;
+    viewerQualityAudioState = null;
+    if (!state) return;
+    try { state.source?.disconnect(); } catch {}
+    try { state.delay?.disconnect(); } catch {}
+    try { state.gain?.disconnect(); } catch {}
+    try { state.context?.close?.(); } catch {}
+  }
+
+  async function initViewerQualityAudio(stream, delayMs = 10_000) {
+    cleanupViewerQualityAudio();
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor || !stream?.getAudioTracks?.().length) return false;
+
+    try {
+      const maxDelaySeconds = 60;
+      const context = new AudioContextCtor({ latencyHint: "playback" });
+      const source = context.createMediaStreamSource(stream);
+      const delay = context.createDelay(maxDelaySeconds);
+      const gain = context.createGain();
+      const baseDelayMs = Math.max(0, Number(delayMs) || 10_000);
+      delay.delayTime.value = Math.min(maxDelaySeconds - 0.5, baseDelayMs / 1000);
+      gain.gain.value = 1;
+      source.connect(delay).connect(gain).connect(context.destination);
+      viewerQualityAudioState = { context, source, delay, gain, baseDelayMs, enabled: true };
+      try { await context.resume(); } catch {}
+      if (context.state !== "running") els.viewerSoundBtn.textContent = "Ativar som";
+      return true;
+    } catch (error) {
+      console.warn("Áudio atrasado indisponível:", error);
+      cleanupViewerQualityAudio();
+      return false;
+    }
+  }
+
+  function adjustViewerQualityAudioDelay(extraDelayMs = 0) {
+    const state = viewerQualityAudioState;
+    if (!state?.delay || !state?.context) return;
+    const target = Math.min(59.5, Math.max(0, (state.baseDelayMs + Math.max(0, extraDelayMs)) / 1000));
+    try {
+      state.delay.delayTime.setTargetAtTime(target, state.context.currentTime, 0.15);
+    } catch {
+      try { state.delay.delayTime.value = target; } catch {}
+    }
+  }
+
+  function cleanupQualityViewer() {
+    if (qualityViewer) {
+      try { qualityViewer.stop(); } catch {}
+      qualityViewer = null;
+    }
+    cleanupViewerQualityAudio();
+    els.viewerCanvas?.classList.add("hidden");
+  }
+
+  function ensureQualityViewer(conn) {
+    if (qualityViewer) return qualityViewer;
+    if (!window.EspelhaQuality?.createViewer || !els.viewerCanvas) return null;
+
+    qualityViewer = window.EspelhaQuality.createViewer({
+      canvas: els.viewerCanvas,
+      onStatus: (text) => {
+        els.viewerStatusText.textContent = text;
+      },
+      onReady: () => {
+        els.viewerVideo.pause();
+        els.viewerVideo.srcObject = null;
+        els.viewerVideo.classList.add("hidden");
+        els.viewerCanvas.classList.remove("hidden");
+        els.viewerWaiting.classList.add("hidden");
+        els.viewerError.classList.add("hidden");
+        els.viewerLiveState.className = "live-state";
+        els.viewerLiveState.innerHTML = "<i></i> AO VIVO";
+      },
+      onUnsupported: () => {
+        try { conn?.send?.({ type: "hq-unsupported" }); } catch {}
+        els.viewerStatusText.textContent = "WebCodecs indisponível · alternando para baixa latência";
+      },
+      onDelayChange: (extraDelayMs) => adjustViewerQualityAudioDelay(extraDelayMs)
+    });
+    return qualityViewer;
+  }
+
   function connectHostPeer() {
     const hostId = roomPeerId(roomId);
     peer = createPeer(hostId);
@@ -1072,19 +1272,33 @@
     });
 
     peer.on("connection", (conn) => {
-      conn.on("open", () => {
+      conn.on("open", async () => {
         const viewerName = conn.metadata?.name || `Visitante ${String(conn.peer).slice(-4).toUpperCase()}`;
         viewerConnections.set(conn.peer, { conn, viewerName, joinedAt: Date.now() });
         renderAudience();
         conn.send({ type: "host-ready", roomId, deliveryMode: selectedDeliveryMode() });
+
         if (selectedDeliveryMode() === "quality") {
-          const bufferedStarted = startBufferedStreamToViewer(conn.peer);
-          if (!bufferedStarted) {
-            // Fallback: se MediaRecorder/MSE não forem compatíveis, mantém o WebRTC tradicional.
-            sendStreamToViewer(conn.peer);
+          const started = await startQualityStreamToViewer(conn.peer);
+          if (!started) {
+            conn.send({ type: "hq-fallback" });
+            sendStreamToViewer(conn.peer, "latency");
           }
         } else {
-          sendStreamToViewer(conn.peer);
+          sendStreamToViewer(conn.peer, "latency");
+        }
+      });
+
+      conn.on("data", (data) => {
+        if (data?.type === "hq-unsupported") {
+          qualityHost?.removeViewer?.(conn.peer);
+          const audioCall = qualityAudioCalls.get(conn.peer);
+          if (audioCall) {
+            try { audioCall.close(); } catch {}
+            qualityAudioCalls.delete(conn.peer);
+          }
+          conn.send({ type: "hq-fallback" });
+          sendStreamToViewer(conn.peer, "latency");
         }
       });
 
@@ -1112,11 +1326,12 @@
     });
   }
 
-  function sendStreamToViewer(viewerPeerId) {
+  function sendStreamToViewer(viewerPeerId, modeOverride = null) {
     if (!peer || !outgoingStream || viewerCalls.has(viewerPeerId)) return;
+    const deliveryMode = modeOverride || selectedDeliveryMode();
 
     const call = peer.call(viewerPeerId, outgoingStream, {
-      metadata: { roomId, kind: "screen", deliveryMode: selectedDeliveryMode() },
+      metadata: { roomId, kind: "screen", deliveryMode },
       sdpTransform: preferH264Sdp
     });
 
@@ -1136,6 +1351,12 @@
   function removeViewer(peerId) {
     viewerConnections.delete(peerId);
     stopBufferedRecorder(peerId);
+    qualityHost?.removeViewer?.(peerId);
+    const qualityAudioCall = qualityAudioCalls.get(peerId);
+    if (qualityAudioCall) {
+      try { qualityAudioCall.close(); } catch {}
+      qualityAudioCalls.delete(peerId);
+    }
     const call = viewerCalls.get(peerId);
     if (call) {
       try { call.close(); } catch {}
@@ -1169,6 +1390,9 @@
   function cleanupStreams() {
     stopEncoderStats();
     stopAllBufferedRecorders();
+    try { qualityHost?.stop?.(); } catch {}
+    qualityHost = null;
+    stopQualityAudioMixer();
     displayStream?.getTracks().forEach((track) => track.stop());
     micStream?.getTracks().forEach((track) => track.stop());
     displayStream = null;
@@ -1187,6 +1411,7 @@
     viewerCalls.forEach((call) => { try { call.close(); } catch {} });
     viewerConnections.clear();
     viewerCalls.clear();
+    qualityAudioCalls.clear();
 
     if (peer) {
       try { peer.destroy(); } catch {}
@@ -1213,8 +1438,11 @@
     els.viewerTitle.textContent = `Sala ${roomId}`;
     els.viewerStatusText.textContent = "Procurando transmissão...";
     cleanupBufferedViewerState();
+    cleanupQualityViewer();
     els.viewerWaiting.classList.remove("hidden");
     els.viewerError.classList.add("hidden");
+    els.viewerCanvas?.classList.add("hidden");
+    els.viewerVideo.classList.remove("hidden");
     els.viewerVideo.pause();
     els.viewerVideo.srcObject = null;
     els.viewerVideo.removeAttribute("src");
@@ -1254,6 +1482,33 @@
       });
 
       conn.on("data", (data) => {
+        if (data?.type === "hq-start" || data?.type === "hq-config" || data?.type === "hq-video" || data?.type === "hq-end") {
+          const quality = ensureQualityViewer(conn);
+          if (!quality) {
+            try { conn.send({ type: "hq-unsupported" }); } catch {}
+            return;
+          }
+          if (data.type === "hq-start") {
+            gotStream = true;
+            clearTimeout(failTimer);
+            els.viewerWaiting.classList.remove("hidden");
+            els.viewerLiveState.className = "live-state waiting";
+            els.viewerLiveState.innerHTML = "<i></i> BUFFERIZANDO";
+          }
+          quality.handleMessage(data);
+          return;
+        }
+
+        if (data?.type === "hq-fallback") {
+          cleanupQualityViewer();
+          els.viewerVideo.classList.remove("hidden");
+          els.viewerCanvas?.classList.add("hidden");
+          els.viewerWaiting.classList.remove("hidden");
+          els.viewerStatusText.textContent = "Alta qualidade indisponível · alternando para baixa latência";
+          return;
+        }
+
+        // Compatibilidade com versões antigas do host.
         if (data?.type === "buffered-start") {
           const initialized = initBufferedViewer(data);
           if (!initialized) {
@@ -1287,6 +1542,7 @@
 
         if (data?.type === "host-ended") {
           cleanupBufferedViewerState();
+          cleanupQualityViewer();
           fail("A transmissão foi encerrada por quem estava compartilhando.");
           els.viewerVideo.srcObject = null;
         }
@@ -1296,9 +1552,8 @@
         if (gotStream) {
           els.viewerStatusText.textContent = "Transmissão encerrada";
           els.viewerLiveState.innerHTML = "<i></i> ENCERRADA";
-          if (viewerBufferedState) {
-            els.viewerVideo.pause();
-          }
+          if (viewerBufferedState) els.viewerVideo.pause();
+          cleanupQualityViewer();
         } else if (connectionOpened) {
           fail("A transmissão foi encerrada antes do vídeo começar.");
         }
@@ -1313,10 +1568,19 @@
         return;
       }
 
+      if (call.metadata?.kind === "hq-audio") {
+        call.answer();
+        call.on("stream", async (stream) => {
+          await initViewerQualityAudio(stream, Number(call.metadata?.delayMs) || 10_000);
+        });
+        return;
+      }
+
       const deliveryMode = call.metadata?.deliveryMode === "quality" ? "quality" : "latency";
-      // Uma chamada WebRTC recebida em alta qualidade aqui é somente fallback para navegadores
-      // sem suporte ao transporte bufferizado por MediaRecorder + MediaSource.
       cleanupBufferedViewerState();
+      cleanupQualityViewer();
+      els.viewerCanvas?.classList.add("hidden");
+      els.viewerVideo.classList.remove("hidden");
       call.answer(undefined, { sdpTransform: preferH264Sdp });
       call.on("stream", async (stream) => {
         gotStream = true;
@@ -1382,11 +1646,14 @@
   function leaveViewer() {
     if (role !== "viewer") return;
     cleanupBufferedViewerState();
+    cleanupQualityViewer();
     if (peer) {
       try { peer.destroy(); } catch {}
       peer = null;
     }
     els.viewerVideo.srcObject = null;
+    els.viewerVideo.classList.remove("hidden");
+    els.viewerCanvas?.classList.add("hidden");
     role = null;
   }
 
@@ -1419,6 +1686,23 @@
   els.stopShareBtn.addEventListener("click", () => stopHost(false));
 
   els.viewerSoundBtn.addEventListener("click", async () => {
+    if (viewerQualityAudioState) {
+      const state = viewerQualityAudioState;
+      if (state.context?.state !== "running") {
+        try { await state.context.resume(); } catch {}
+        state.enabled = true;
+        try { state.gain.gain.setValueAtTime(1, state.context.currentTime); } catch {}
+        els.viewerSoundBtn.textContent = state.context?.state === "running" ? "Som: ligado" : "Ativar som";
+        return;
+      }
+      state.enabled = !state.enabled;
+      try { state.gain.gain.setValueAtTime(state.enabled ? 1 : 0, state.context.currentTime); } catch {
+        try { state.gain.gain.value = state.enabled ? 1 : 0; } catch {}
+      }
+      els.viewerSoundBtn.textContent = state.enabled ? "Som: ligado" : "Ativar som";
+      return;
+    }
+
     els.viewerVideo.muted = !els.viewerVideo.muted;
     if (!els.viewerVideo.muted) {
       await els.viewerVideo.play().catch(() => {});
