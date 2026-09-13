@@ -440,17 +440,20 @@
 
   async function configureReceiverBuffer(call, mode) {
     const highQuality = mode === "quality";
-    const targetMs = highQuality ? 1500 : 0;
+    // Em alta qualidade, aceitamos bastante atraso para absorver oscilações de rede.
+    // O navegador ainda pode limitar internamente esse alvo.
+    const targetMs = highQuality ? 5000 : 0;
     const targetSeconds = targetMs / 1000;
 
-    for (let attempt = 0; attempt < 30; attempt += 1) {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
       const receivers = call?.peerConnection?.getReceivers?.().filter((receiver) => receiver.track && ["video", "audio"].includes(receiver.track.kind)) || [];
       if (receivers.length) {
         for (const receiver of receivers) {
           try {
             if ("jitterBufferTarget" in receiver) {
               receiver.jitterBufferTarget = targetMs;
-            } else if ("playoutDelayHint" in receiver) {
+            }
+            if ("playoutDelayHint" in receiver) {
               receiver.playoutDelayHint = targetSeconds;
             }
           } catch (error) {
@@ -948,11 +951,20 @@
         gotStream = true;
         clearTimeout(failTimer);
         els.viewerVideo.srcObject = stream;
-        els.viewerWaiting.classList.add("hidden");
         els.viewerError.classList.add("hidden");
         els.viewerLiveState.className = "live-state";
         els.viewerLiveState.innerHTML = "<i></i> AO VIVO";
-        els.viewerStatusText.textContent = deliveryMode === "quality" ? "Alta qualidade · buffer ampliado" : "Baixa latência · buffer mínimo";
+
+        if (deliveryMode === "quality") {
+          els.viewerStatusText.textContent = "Alta qualidade · preparando buffer (~5 s)";
+          // Segura a reprodução por um instante para o receptor acumular mídia antes de começar.
+          await new Promise((resolve) => setTimeout(resolve, 1800));
+          els.viewerStatusText.textContent = "Alta qualidade · buffer ampliado (~5 s)";
+        } else {
+          els.viewerStatusText.textContent = "Baixa latência · buffer mínimo";
+        }
+
+        els.viewerWaiting.classList.add("hidden");
         try {
           await els.viewerVideo.play();
         } catch {
