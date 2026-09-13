@@ -176,6 +176,30 @@
           <span><strong>H.264 preferido para transmissão.</strong> A aceleração é decidida pelo navegador; em uma GPU NVIDIA compatível ele pode usar NVENC, mas uma página web não consegue forçar o NVENC diretamente.</span>
         </div>
 
+        <div class="delivery-mode-block">
+          <span class="field-label">Modo de transmissão</span>
+          <div class="delivery-mode" role="radiogroup" aria-label="Modo de transmissão">
+            <label class="delivery-mode-option">
+              <input type="radio" name="deliveryMode" value="latency" checked />
+              <span class="delivery-mode-card">
+                <span class="delivery-mode-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none"><path d="M13.5 2.8 6.8 13h5.1l-1.4 8.2L17.2 11h-5.1l1.4-8.2Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </span>
+                <span><strong>Baixa latência</strong><small>Prioriza resposta rápida e reduz o buffer de reprodução.</small></span>
+              </span>
+            </label>
+            <label class="delivery-mode-option">
+              <input type="radio" name="deliveryMode" value="quality" />
+              <span class="delivery-mode-card">
+                <span class="delivery-mode-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-9Z" stroke="currentColor" stroke-width="1.8"/><path d="m8 14 2.4-2.7 2 2 2.6-3 3 3.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="9" r="1.2" fill="currentColor"/></svg>
+                </span>
+                <span><strong>Alta qualidade</strong><small>Aumenta o buffer para estabilidade e preserva a qualidade, mesmo com mais atraso.</small></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
         <div class="toggle-list">
           <label class="toggle-row">
             <span><strong>Áudio da tela</strong><small>Inclui áudio quando o navegador/sistema permitir.</small></span>
@@ -257,6 +281,7 @@
 
           <div class="side-card tech-card">
             <div><span>Conexão</span><strong id="peerStatus">Conectando...</strong></div>
+            <div><span>Modo</span><strong id="deliveryModeStatus">—</strong></div>
             <div><span>Bitrate</span><strong id="bitrateStatus">—</strong></div>
             <div><span>Codec / encoder</span><strong id="encoderStatus">Aguardando...</strong></div>
             <div><span>Áudio da tela</span><strong id="systemAudioStatus">—</strong></div>

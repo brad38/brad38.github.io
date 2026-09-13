@@ -21,6 +21,7 @@
     qualitySelect: $("#qualitySelect"),
     fpsSelect: $("#fpsSelect"),
     bitrateSelect: $("#bitrateSelect"),
+    deliveryModeInputs: $$("input[name='deliveryMode']"),
     systemAudioToggle: $("#systemAudioToggle"),
     micToggle: $("#micToggle"),
 
@@ -35,6 +36,7 @@
     audienceEmpty: $("#audienceEmpty"),
     audienceList: $("#audienceList"),
     peerStatus: $("#peerStatus"),
+    deliveryModeStatus: $("#deliveryModeStatus"),
     bitrateStatus: $("#bitrateStatus"),
     encoderStatus: $("#encoderStatus"),
     systemAudioStatus: $("#systemAudioStatus"),
@@ -428,6 +430,39 @@
     return Number.isFinite(mbps) && mbps > 0 ? Math.round(mbps * 1_000_000) : null;
   }
 
+  function selectedDeliveryMode() {
+    return els.deliveryModeInputs?.find((input) => input.checked)?.value === "quality" ? "quality" : "latency";
+  }
+
+  function deliveryModeLabel(mode = selectedDeliveryMode()) {
+    return mode === "quality" ? "Alta qualidade" : "Baixa latência";
+  }
+
+  async function configureReceiverBuffer(call, mode) {
+    const highQuality = mode === "quality";
+    const targetMs = highQuality ? 1500 : 0;
+    const targetSeconds = targetMs / 1000;
+
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const receivers = call?.peerConnection?.getReceivers?.().filter((receiver) => receiver.track && ["video", "audio"].includes(receiver.track.kind)) || [];
+      if (receivers.length) {
+        for (const receiver of receivers) {
+          try {
+            if ("jitterBufferTarget" in receiver) {
+              receiver.jitterBufferTarget = targetMs;
+            } else if ("playoutDelayHint" in receiver) {
+              receiver.playoutDelayHint = targetSeconds;
+            }
+          } catch (error) {
+            console.warn("Não foi possível ajustar o buffer do receptor:", error);
+          }
+        }
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
   function preferH264Sdp(sdp) {
     if (!sdp || typeof sdp !== "string") return sdp;
 
@@ -501,8 +536,9 @@
       }
 
       params.encodings[0].maxFramerate = fps;
+      const deliveryMode = selectedDeliveryMode();
       if ("degradationPreference" in params || typeof params.degradationPreference === "string") {
-        params.degradationPreference = "maintain-resolution";
+        params.degradationPreference = deliveryMode === "quality" ? "maintain-resolution" : "maintain-framerate";
       }
 
       await sender.setParameters(params);
@@ -623,7 +659,8 @@
     const screenTrack = displayStream.getVideoTracks()[0];
     if (screenTrack) {
       const fps = Number(els.fpsSelect.value) || 60;
-      try { screenTrack.contentHint = fps >= 60 ? "motion" : "detail"; } catch {}
+      const deliveryMode = selectedDeliveryMode();
+      try { screenTrack.contentHint = deliveryMode === "quality" ? "detail" : "motion"; } catch {}
       try {
         await screenTrack.applyConstraints({ frameRate: { ideal: fps, max: fps } });
       } catch (error) {
@@ -646,7 +683,9 @@
     const frameRate = settings.frameRate ? Math.round(settings.frameRate) : Number(els.fpsSelect.value);
     const res = height ? `${height}p` : (els.qualitySelect.value === "auto" ? "Auto" : `${els.qualitySelect.value}p`);
     const bitrateLabel = els.bitrateSelect?.value === "auto" ? "Auto" : `${els.bitrateSelect?.value || "—"} Mbps`;
+    const deliveryMode = selectedDeliveryMode();
     els.streamStats.textContent = `${res} · ${frameRate || "—"} FPS · ${bitrateLabel}`;
+    if (els.deliveryModeStatus) els.deliveryModeStatus.textContent = deliveryModeLabel(deliveryMode);
     if (els.bitrateStatus) els.bitrateStatus.textContent = els.bitrateSelect?.value === "auto" ? "Automático" : `Máx. ${els.bitrateSelect?.value} Mbps`;
     if (els.encoderStatus) els.encoderStatus.textContent = "H.264 preferido";
     els.systemAudioStatus.textContent = displayStream?.getAudioTracks().length ? "Ativo" : "Sem áudio";
@@ -745,7 +784,7 @@
     if (!peer || !outgoingStream || viewerCalls.has(viewerPeerId)) return;
 
     const call = peer.call(viewerPeerId, outgoingStream, {
-      metadata: { roomId, kind: "screen" },
+      metadata: { roomId, kind: "screen", deliveryMode: selectedDeliveryMode() },
       sdpTransform: preferH264Sdp
     });
 
@@ -902,7 +941,9 @@
         return;
       }
 
+      const deliveryMode = call.metadata?.deliveryMode === "quality" ? "quality" : "latency";
       call.answer(undefined, { sdpTransform: preferH264Sdp });
+      configureReceiverBuffer(call, deliveryMode);
       call.on("stream", async (stream) => {
         gotStream = true;
         clearTimeout(failTimer);
@@ -911,7 +952,7 @@
         els.viewerError.classList.add("hidden");
         els.viewerLiveState.className = "live-state";
         els.viewerLiveState.innerHTML = "<i></i> AO VIVO";
-        els.viewerStatusText.textContent = "Transmissão P2P ativa";
+        els.viewerStatusText.textContent = deliveryMode === "quality" ? "Alta qualidade · buffer ampliado" : "Baixa latência · buffer mínimo";
         try {
           await els.viewerVideo.play();
         } catch {
