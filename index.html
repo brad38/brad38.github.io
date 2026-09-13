@@ -126,6 +126,7 @@
             <span class="field-label">Fluidez</span>
             <div class="custom-select" data-custom-select>
               <select id="fpsSelect" class="native-select">
+                <option value="120">120 FPS</option>
                 <option value="60" selected>60 FPS</option>
                 <option value="30">30 FPS</option>
               </select>
@@ -140,8 +141,39 @@
               </button>
               <div class="select-menu hidden" data-select-menu role="listbox" aria-label="Fluidez"></div>
             </div>
-            <span class="field-help">60 FPS usa mais upload e CPU.</span>
+            <span class="field-help">120 FPS depende do navegador, monitor e captura.</span>
           </label>
+
+          <label class="field-card">
+            <span class="field-label">Bitrate</span>
+            <div class="custom-select" data-custom-select>
+              <select id="bitrateSelect" class="native-select">
+                <option value="auto">Automático</option>
+                <option value="4">4 Mbps</option>
+                <option value="8">8 Mbps</option>
+                <option value="12" selected>12 Mbps</option>
+                <option value="20">20 Mbps</option>
+                <option value="35">35 Mbps</option>
+                <option value="50">50 Mbps</option>
+              </select>
+              <button type="button" class="select-trigger" data-select-trigger aria-haspopup="listbox" aria-expanded="false">
+                <span class="select-trigger-copy">
+                  <strong data-select-value>12 Mbps</strong>
+                  <small data-select-caption>Limite de vídeo</small>
+                </span>
+                <span class="select-chevron" aria-hidden="true">
+                  <svg viewBox="0 0 20 20" fill="none"><path d="M5 7.5 10 12.5 15 7.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </span>
+              </button>
+              <div class="select-menu hidden" data-select-menu role="listbox" aria-label="Bitrate"></div>
+            </div>
+            <span class="field-help">É o teto por espectador; o WebRTC pode usar menos.</span>
+          </label>
+        </div>
+
+        <div class="hardware-note">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="3" stroke="currentColor" stroke-width="1.7"/><path d="M8 3v3M12 3v3M16 3v3M8 18v3M12 18v3M16 18v3M1 9h3M1 13h3M20 9h3M20 13h3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          <span><strong>H.264 preferido para transmissão.</strong> A aceleração é decidida pelo navegador; em uma GPU NVIDIA compatível ele pode usar NVENC, mas uma página web não consegue forçar o NVENC diretamente.</span>
         </div>
 
         <div class="toggle-list">
@@ -225,6 +257,8 @@
 
           <div class="side-card tech-card">
             <div><span>Conexão</span><strong id="peerStatus">Conectando...</strong></div>
+            <div><span>Bitrate</span><strong id="bitrateStatus">—</strong></div>
+            <div><span>Codec / encoder</span><strong id="encoderStatus">Aguardando...</strong></div>
             <div><span>Áudio da tela</span><strong id="systemAudioStatus">—</strong></div>
             <div><span>Microfone</span><strong id="micStatus">—</strong></div>
           </div>

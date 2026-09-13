@@ -20,6 +20,7 @@
 
     qualitySelect: $("#qualitySelect"),
     fpsSelect: $("#fpsSelect"),
+    bitrateSelect: $("#bitrateSelect"),
     systemAudioToggle: $("#systemAudioToggle"),
     micToggle: $("#micToggle"),
 
@@ -34,6 +35,8 @@
     audienceEmpty: $("#audienceEmpty"),
     audienceList: $("#audienceList"),
     peerStatus: $("#peerStatus"),
+    bitrateStatus: $("#bitrateStatus"),
+    encoderStatus: $("#encoderStatus"),
     systemAudioStatus: $("#systemAudioStatus"),
     micStatus: $("#micStatus"),
 
@@ -62,6 +65,8 @@
   let toastTimer = null;
   let deferredInstallPrompt = null;
   let isInstalled = false;
+  let encoderStatsTimer = null;
+  let lastEncoderStats = null;
   const PWA_INSTALL_STORAGE_KEY = "espelha-pwa-installed";
 
   const PEER_PREFIX = "espelha-room-";
@@ -78,8 +83,21 @@
     fpsSelect: {
       triggerCaption: "Taxa de quadros",
       optionCaptions: {
-        "60": "Mais fluido, usa mais upload",
+        "120": "Máxima fluidez quando suportado",
+        "60": "Fluido para jogos e movimento",
         "30": "Mais leve e estável"
+      }
+    },
+    bitrateSelect: {
+      triggerCaption: "Limite de vídeo",
+      optionCaptions: {
+        auto: "WebRTC decide dinamicamente",
+        "4": "Leve para conexões mais lentas",
+        "8": "Bom equilíbrio para 1080p",
+        "12": "Alta qualidade para 1080p60",
+        "20": "Alta qualidade / 120 FPS",
+        "35": "Muito alto, exige bastante upload",
+        "50": "Máximo, recomendado só em rede forte"
       }
     }
   };
@@ -403,6 +421,165 @@
     });
   }
 
+  function selectedBitrateBps() {
+    const value = els.bitrateSelect?.value;
+    if (!value || value === "auto") return null;
+    const mbps = Number(value);
+    return Number.isFinite(mbps) && mbps > 0 ? Math.round(mbps * 1_000_000) : null;
+  }
+
+  function preferH264Sdp(sdp) {
+    if (!sdp || typeof sdp !== "string") return sdp;
+
+    const lines = sdp.split(/\r?\n/);
+    const h264Pts = [];
+    const rtxByPrimary = new Map();
+
+    for (const line of lines) {
+      let match = line.match(/^a=rtpmap:(\d+)\s+H264\/90000/i);
+      if (match) h264Pts.push(match[1]);
+
+      match = line.match(/^a=fmtp:(\d+)\s+.*\bapt=(\d+)\b/i);
+      if (match) {
+        const [, rtxPt, primaryPt] = match;
+        if (!rtxByPrimary.has(primaryPt)) rtxByPrimary.set(primaryPt, []);
+        rtxByPrimary.get(primaryPt).push(rtxPt);
+      }
+    }
+
+    if (!h264Pts.length) return sdp;
+
+    const preferred = [];
+    for (const pt of h264Pts) {
+      if (!preferred.includes(pt)) preferred.push(pt);
+      for (const rtxPt of rtxByPrimary.get(pt) || []) {
+        if (!preferred.includes(rtxPt)) preferred.push(rtxPt);
+      }
+    }
+
+    const videoIndex = lines.findIndex((line) => line.startsWith("m=video "));
+    if (videoIndex === -1) return sdp;
+
+    const parts = lines[videoIndex].trim().split(/\s+/);
+    if (parts.length < 4) return sdp;
+
+    const currentPayloads = parts.slice(3);
+    const orderedPayloads = [
+      ...preferred.filter((pt) => currentPayloads.includes(pt)),
+      ...currentPayloads.filter((pt) => !preferred.includes(pt))
+    ];
+
+    lines[videoIndex] = [...parts.slice(0, 3), ...orderedPayloads].join(" ");
+    return lines.join("\r\n");
+  }
+
+  async function findVideoSender(call, maxAttempts = 30) {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const pc = call?.peerConnection;
+      const sender = pc?.getSenders?.().find((item) => item.track?.kind === "video");
+      if (sender) return sender;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return null;
+  }
+
+  async function configureVideoSender(call) {
+    try {
+      const sender = await findVideoSender(call);
+      if (!sender) return;
+
+      const params = sender.getParameters();
+      if (!params.encodings?.length) params.encodings = [{}];
+
+      const bitrate = selectedBitrateBps();
+      const fps = Number(els.fpsSelect?.value) || 60;
+
+      if (bitrate) {
+        params.encodings[0].maxBitrate = bitrate;
+      } else {
+        delete params.encodings[0].maxBitrate;
+      }
+
+      params.encodings[0].maxFramerate = fps;
+      if ("degradationPreference" in params || typeof params.degradationPreference === "string") {
+        params.degradationPreference = "maintain-resolution";
+      }
+
+      await sender.setParameters(params);
+      startEncoderStats(call, sender);
+    } catch (error) {
+      console.warn("Não foi possível aplicar parâmetros avançados do encoder:", error);
+    }
+  }
+
+  async function readEncoderStats(call, sender) {
+    try {
+      const report = await sender.getStats();
+      let outbound = null;
+      let codec = null;
+
+      report.forEach((stat) => {
+        if (stat.type === "outbound-rtp" && stat.kind === "video" && !stat.isRemote) outbound = stat;
+      });
+
+      if (outbound?.codecId) codec = report.get(outbound.codecId);
+
+      let measuredMbps = null;
+      if (outbound?.bytesSent != null && outbound?.timestamp != null && lastEncoderStats) {
+        const byteDelta = outbound.bytesSent - lastEncoderStats.bytesSent;
+        const timeDelta = outbound.timestamp - lastEncoderStats.timestamp;
+        if (byteDelta >= 0 && timeDelta > 0) measuredMbps = (byteDelta * 8) / (timeDelta * 1000);
+      }
+
+      if (outbound?.bytesSent != null && outbound?.timestamp != null) {
+        lastEncoderStats = { bytesSent: outbound.bytesSent, timestamp: outbound.timestamp };
+      }
+
+      const implementation = outbound?.encoderImplementation || outbound?.encoder || "";
+      const codecName = codec?.mimeType?.replace(/^video\//i, "") || "H.264 pref.";
+      const implementationLower = String(implementation).toLowerCase();
+      const isNvenc = implementationLower.includes("nvenc") || implementationLower.includes("nvidia");
+      const hardware = outbound?.powerEfficientEncoder === true;
+
+      if (els.encoderStatus) {
+        if (isNvenc) {
+          els.encoderStatus.textContent = `${codecName} · NVENC`;
+        } else if (implementation) {
+          els.encoderStatus.textContent = `${codecName} · ${implementation}`;
+        } else if (hardware) {
+          els.encoderStatus.textContent = `${codecName} · Hardware`;
+        } else {
+          els.encoderStatus.textContent = `${codecName} · Navegador`;
+        }
+      }
+
+      const configured = els.bitrateSelect?.value;
+      if (els.bitrateStatus) {
+        if (measuredMbps != null && Number.isFinite(measuredMbps)) {
+          const suffix = configured === "auto" ? "auto" : `máx. ${configured}`;
+          els.bitrateStatus.textContent = `${measuredMbps.toFixed(1)} Mbps · ${suffix}`;
+        } else {
+          els.bitrateStatus.textContent = configured === "auto" ? "Automático" : `Máx. ${configured} Mbps`;
+        }
+      }
+    } catch (error) {
+      console.debug("Stats do encoder indisponíveis:", error);
+    }
+  }
+
+  function startEncoderStats(call, sender) {
+    if (encoderStatsTimer) clearInterval(encoderStatsTimer);
+    lastEncoderStats = null;
+    readEncoderStats(call, sender);
+    encoderStatsTimer = setInterval(() => readEncoderStats(call, sender), 2000);
+  }
+
+  function stopEncoderStats() {
+    if (encoderStatsTimer) clearInterval(encoderStatsTimer);
+    encoderStatsTimer = null;
+    lastEncoderStats = null;
+  }
+
   function buildDisplayConstraints() {
     const quality = els.qualitySelect.value;
     const fps = Number(els.fpsSelect.value) || 60;
@@ -444,6 +621,15 @@
     micStream?.getAudioTracks().forEach((track) => outgoingStream.addTrack(track));
 
     const screenTrack = displayStream.getVideoTracks()[0];
+    if (screenTrack) {
+      const fps = Number(els.fpsSelect.value) || 60;
+      try { screenTrack.contentHint = fps >= 60 ? "motion" : "detail"; } catch {}
+      try {
+        await screenTrack.applyConstraints({ frameRate: { ideal: fps, max: fps } });
+      } catch (error) {
+        console.debug("O navegador limitou a taxa de quadros da captura:", error);
+      }
+    }
     screenTrack?.addEventListener("ended", () => stopHost(true), { once: true });
 
     els.hostVideo.srcObject = displayStream;
@@ -459,7 +645,10 @@
     const height = settings.height;
     const frameRate = settings.frameRate ? Math.round(settings.frameRate) : Number(els.fpsSelect.value);
     const res = height ? `${height}p` : (els.qualitySelect.value === "auto" ? "Auto" : `${els.qualitySelect.value}p`);
-    els.streamStats.textContent = `${res} · ${frameRate || "—"} FPS`;
+    const bitrateLabel = els.bitrateSelect?.value === "auto" ? "Auto" : `${els.bitrateSelect?.value || "—"} Mbps`;
+    els.streamStats.textContent = `${res} · ${frameRate || "—"} FPS · ${bitrateLabel}`;
+    if (els.bitrateStatus) els.bitrateStatus.textContent = els.bitrateSelect?.value === "auto" ? "Automático" : `Máx. ${els.bitrateSelect?.value} Mbps`;
+    if (els.encoderStatus) els.encoderStatus.textContent = "H.264 preferido";
     els.systemAudioStatus.textContent = displayStream?.getAudioTracks().length ? "Ativo" : "Sem áudio";
     els.micStatus.textContent = micStream?.getAudioTracks().length ? "Ativo" : "Desligado";
   }
@@ -556,11 +745,13 @@
     if (!peer || !outgoingStream || viewerCalls.has(viewerPeerId)) return;
 
     const call = peer.call(viewerPeerId, outgoingStream, {
-      metadata: { roomId, kind: "screen" }
+      metadata: { roomId, kind: "screen" },
+      sdpTransform: preferH264Sdp
     });
 
     if (!call) return;
     viewerCalls.set(viewerPeerId, call);
+    configureVideoSender(call);
 
     call.on("close", () => {
       viewerCalls.delete(viewerPeerId);
@@ -604,6 +795,7 @@
   }
 
   function cleanupStreams() {
+    stopEncoderStats();
     displayStream?.getTracks().forEach((track) => track.stop());
     micStream?.getTracks().forEach((track) => track.stop());
     displayStream = null;
@@ -710,7 +902,7 @@
         return;
       }
 
-      call.answer();
+      call.answer(undefined, { sdpTransform: preferH264Sdp });
       call.on("stream", async (stream) => {
         gotStream = true;
         clearTimeout(failTimer);
