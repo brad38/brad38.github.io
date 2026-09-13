@@ -1272,24 +1272,57 @@
     });
 
     peer.on("connection", (conn) => {
-      conn.on("open", async () => {
+      let streamStarted = false;
+      let capabilityTimer = null;
+
+      const startForViewer = async (capabilities = {}) => {
+        if (streamStarted || !conn.open) return;
+        streamStarted = true;
+        if (capabilityTimer) {
+          clearTimeout(capabilityTimer);
+          capabilityTimer = null;
+        }
+
+        const wantsQuality = selectedDeliveryMode() === "quality";
+        const supportsQuality = capabilities.supportsQualityWebCodecs === true;
+
+        // Clientes antigos não enviam supportsQualityWebCodecs. Para eles usamos
+        // WebRTC normal, evitando que fiquem esperando mensagens HQ desconhecidas.
+        if (wantsQuality && supportsQuality) {
+          conn.send({ type: "hq-pending", roomId });
+          const started = await Promise.race([
+            startQualityStreamToViewer(conn.peer),
+            new Promise((resolve) => setTimeout(() => resolve(false), 8000))
+          ]);
+          if (started) return;
+          try { conn.send({ type: "hq-fallback" }); } catch {}
+        }
+
+        sendStreamToViewer(conn.peer, "latency");
+      };
+
+      conn.on("open", () => {
         const viewerName = conn.metadata?.name || `Visitante ${String(conn.peer).slice(-4).toUpperCase()}`;
         viewerConnections.set(conn.peer, { conn, viewerName, joinedAt: Date.now() });
         renderAudience();
-        conn.send({ type: "host-ready", roomId, deliveryMode: selectedDeliveryMode() });
+        conn.send({
+          type: "host-ready",
+          roomId,
+          deliveryMode: selectedDeliveryMode(),
+          protocolVersion: 3
+        });
 
-        if (selectedDeliveryMode() === "quality") {
-          const started = await startQualityStreamToViewer(conn.peer);
-          if (!started) {
-            conn.send({ type: "hq-fallback" });
-            sendStreamToViewer(conn.peer, "latency");
-          }
-        } else {
-          sendStreamToViewer(conn.peer, "latency");
-        }
+        // Dá um pequeno tempo para o viewer anunciar capacidades. Se for um
+        // cliente antigo, ele não anuncia e recebe o fallback WebRTC normal.
+        capabilityTimer = setTimeout(() => startForViewer({}), 1800);
       });
 
       conn.on("data", (data) => {
+        if (data?.type === "viewer-ready") {
+          startForViewer(data);
+          return;
+        }
+
         if (data?.type === "hq-unsupported") {
           qualityHost?.removeViewer?.(conn.peer);
           const audioCall = qualityAudioCalls.get(conn.peer);
@@ -1297,7 +1330,7 @@
             try { audioCall.close(); } catch {}
             qualityAudioCalls.delete(conn.peer);
           }
-          conn.send({ type: "hq-fallback" });
+          try { conn.send({ type: "hq-fallback" }); } catch {}
           sendStreamToViewer(conn.peer, "latency");
         }
       });
@@ -1476,12 +1509,29 @@
 
       conn.on("open", () => {
         connectionOpened = true;
-        els.viewerStatusText.textContent = "Sala encontrada. Recebendo vídeo...";
-        conn.send({ type: "viewer-ready" });
-        failTimer = setTimeout(() => fail("A sala foi encontrada, mas o vídeo não chegou. Tente recarregar a página."), 12000);
+        els.viewerStatusText.textContent = "Sala encontrada. Negociando transmissão...";
+        conn.send({
+          type: "viewer-ready",
+          protocolVersion: 3,
+          supportsQualityWebCodecs: Boolean(window.EspelhaQuality?.viewerSupported?.() && els.viewerCanvas)
+        });
+        failTimer = setTimeout(() => fail("A sala foi encontrada, mas a transmissão não iniciou. Tente recarregar a página."), 30000);
       });
 
       conn.on("data", (data) => {
+        if (data?.type === "host-ready") {
+          els.viewerStatusText.textContent = data.deliveryMode === "quality"
+            ? "Sala encontrada. Preparando alta qualidade..."
+            : "Sala encontrada. Preparando transmissão...";
+          return;
+        }
+
+        if (data?.type === "hq-pending") {
+          clearTimeout(failTimer);
+          failTimer = setTimeout(() => fail("A sala foi encontrada, mas o modo de alta qualidade não conseguiu iniciar."), 30000);
+          els.viewerStatusText.textContent = "Alta qualidade · iniciando encoder...";
+          return;
+        }
         if (data?.type === "hq-start" || data?.type === "hq-config" || data?.type === "hq-video" || data?.type === "hq-end") {
           const quality = ensureQualityViewer(conn);
           if (!quality) {
@@ -1500,6 +1550,8 @@
         }
 
         if (data?.type === "hq-fallback") {
+          clearTimeout(failTimer);
+          failTimer = setTimeout(() => fail("O fallback WebRTC não conseguiu iniciar a transmissão."), 20000);
           cleanupQualityViewer();
           els.viewerVideo.classList.remove("hidden");
           els.viewerCanvas?.classList.add("hidden");
